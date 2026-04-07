@@ -4,8 +4,8 @@ tagline: Bulma Clean Theme
 email: your-email@domain.com
 description: >
   The demo site for Bulma Clean Theme, made for Jekyll and GitHub pages websites
-baseurl: ""
-url: "https://yoruto-.github.io"
+baseurl: "/futures-game"
+url: "https://yoruto.github.io"
 permalink: pretty
 
 paginate: 5

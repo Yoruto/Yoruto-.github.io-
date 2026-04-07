@@ -1,21 +1,22 @@
 ---
 layout: null
 ---
+{% assign game_url = site.baseurl | append: '/futures-game/' %}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="refresh" content="0; url={{ '/futures-game/' | relative_url }}">
-  <link rel="canonical" href="{{ '/futures-game/' | absolute_url }}">
+  <meta http-equiv="refresh" content="0; url={{ game_url }}">
+  <link rel="canonical" href="{{ site.url }}{{ game_url }}">
   <title>正在进入期货游戏…</title>
   <script>
-    window.location.replace({{ '/futures-game/' | relative_url | jsonify }});
+    window.location.replace({{ game_url | jsonify }});
   </script>
 </head>
 <body>
   <p style="font-family: system-ui, sans-serif; padding: 1.5rem;">
-    正在跳转至 <a href="{{ '/futures-game/' | relative_url }}">期货模拟游戏</a>…
+    正在跳转至 <a href="{{ game_url }}">期货模拟游戏</a>…
   </p>
 </body>
 </html>
