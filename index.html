@@ -1,14 +1,14 @@
 ---
 layout: null
 ---
-{% assign game_url = site.baseurl | append: '/futures-game/' %}
+{% assign game_url = '/futures-game/' | relative_url %}
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="refresh" content="0; url={{ game_url }}">
-  <link rel="canonical" href="{{ site.url }}{{ game_url }}">
+  <link rel="canonical" href="{{ '/futures-game/' | absolute_url }}">
   <title>正在进入期货游戏…</title>
   <script>
     window.location.replace({{ game_url | jsonify }});
