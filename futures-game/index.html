@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>期货模拟交易游戏 - 种子与作物7日轮回</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            background: linear-gradient(145deg, #1a472a 0%, #0e2a1a 100%);
+            font-family: 'Segoe UI', 'Roboto', 'Noto Sans', system-ui, sans-serif;
+            margin: 0;
+            padding: 20px;
+            color: #f5f2e0;
+        }
+        .game-container {
+            max-width: 1600px;
+            margin: 0 auto;
+            background: rgba(30, 20, 15, 0.75);
+            backdrop-filter: blur(3px);
+            border-radius: 2rem;
+            padding: 1.2rem;
+            box-shadow: 0 20px 35px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+            border: 1px solid #dbb87c;
+        }
+        /* 头部状态 */
+        .status-bar {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            background: #2c2118;
+            padding: 0.8rem 1.5rem;
+            border-radius: 2rem;
+            margin-bottom: 1.5rem;
+            gap: 1rem;
+            box-shadow: inset 0 1px 3px rgba(0,0,0,0.5), 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .stat-card {
+            background: #3d2c21;
+            padding: 0.4rem 1rem;
+            border-radius: 2rem;
+            font-weight: bold;
+            display: flex;
+            gap: 0.6rem;
+            align-items: baseline;
+            flex-wrap: wrap;
+        }
+        .stat-label {
+            font-size: 0.8rem;
+            letter-spacing: 1px;
+            color: #e9c891;
+        }
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: #ffd966;
+            font-family: monospace;
+        }
+        .day-badge {
+            background: #c07a2c;
+            padding: 0.4rem 1.2rem;
+            border-radius: 2rem;
+            font-size: 1.2rem;
+            font-weight: bold;
+            box-shadow: inset 0 -1px 0 #6b3f12;
+        }
+        /* 商品表格 */
+        .market-table {
+            width: 100%;
+            background: #1f2a1b;
+            border-radius: 1.5rem;
+            overflow: hidden;
+            margin-bottom: 1.8rem;
+            border-collapse: collapse;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+        }
+        .market-table th, .market-table td {
+            padding: 0.8rem 0.5rem;
+            text-align: center;
+            border-bottom: 1px solid #5e4b34;
+            font-size: 0.9rem;
+        }
+        .market-table th {
+            background: #3a2c1f;
+            color: #ffeaac;
+            font-weight: 600;
+        }
+        .commodity-name {
+            font-weight: bold;
+            background: #2d3a22;
+        }
+        .price {
+            font-family: monospace;
+            font-weight: bold;
+            color: #f5bc70;
+            font-size: 1.1rem;
+        }
+        .btn-group {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        button {
+            background: #5e3a22;
+            border: none;
+            color: #fef0cf;
+            padding: 6px 12px;
+            border-radius: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.1s linear;
+            font-size: 0.75rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+        }
+        button:active {
+            transform: scale(0.96);
+        }
+        button.primary {
+            background: #bd7a3a;
+            color: white;
+            box-shadow: 0 2px 6px #462813;
+        }
+        button.danger {
+            background: #8b3c2c;
+        }
+        button.warning {
+            background: #a5651e;
+        }
+        input {
+            background: #2e2a24;
+            border: 1px solid #b97f44;
+            color: #ffefc0;
+            padding: 5px 8px;
+            border-radius: 30px;
+            width: 70px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .positions-area {
+            background: #1e2b18;
+            border-radius: 1.2rem;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        .section-title {
+            font-size: 1.2rem;
+            border-left: 8px solid #f3b35f;
+            padding-left: 1rem;
+            margin: 0 0 0.8rem 0;
+            font-weight: bold;
+        }
+        .orderbook-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+        .order-list {
+            flex: 2;
+            background: #2b241c;
+            border-radius: 1rem;
+            padding: 0.8rem;
+        }
+        .order-item {
+            background: #3e3327;
+            margin: 6px 0;
+            padding: 6px 12px;
+            border-radius: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+        .create-order {
+            flex: 1;
+            background: #2b241c;
+            border-radius: 1rem;
+            padding: 0.8rem;
+        }
+        .log-box {
+            background: #0f1a0c;
+            border-radius: 1rem;
+            padding: 0.6rem;
+            margin-top: 1rem;
+            max-height: 150px;
+            overflow-y: auto;
+            font-size: 0.75rem;
+            font-family: monospace;
+        }
+        hr {
+            border-color: #7e5a3a;
+        }
+        .flex-between {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .badge-profit {
+            color: #8affb3;
+        }
+        .badge-loss {
+            color: #ffaa8a;
+        }
+        @media (max-width: 800px) {
+            .btn-group button { padding: 4px 8px; font-size: 0.7rem; }
+            .stat-value { font-size: 1.2rem; }
+        }
+    </style>
+</head>
+<body>
+<div class="game-container">
+    <!-- 状态栏 -->
+    <div class="status-bar">
+        <div class="stat-card">💰 现金: <span class="stat-value" id="cashDisplay">0.00</span></div>
+        <div class="stat-card">📊 总资产: <span class="stat-value" id="equityDisplay">0.00</span></div>
+        <div class="stat-card">🌾 轮回日: <span class="day-badge" id="dayCounter">第1天</span></div>
+        <button id="nextDayBtn" class="primary" style="background:#c97e3a;">⏩ 下一天 ➕</button>
+        <button id="resetGameBtn" style="background:#5e4b34;">🔄 重置游戏</button>
+    </div>
+
+    <!-- 商品行情与交易 -->
+    <table class="market-table" id="marketTable">
+        <thead>
+            <tr><th>商品</th><th>现价(¥)</th><th>多单持仓</th><th>空单持仓</th><th>浮动盈亏</th><th>操作(市价)</th></tr>
+        </thead>
+        <tbody id="marketTbody"></tbody>
+    </table>
+
+    <!-- 持仓总览 + 挂单区 -->
+    <div class="positions-area">
+        <div class="section-title">📋 当前持仓明细 (多/空)</div>
+        <div id="positionsDetail" style="font-size:0.85rem; display:flex; flex-wrap:wrap; gap:12px;"></div>
+    </div>
+
+    <!-- 挂单簿 + 新建挂单 -->
+    <div class="orderbook-grid">
+        <div class="order-list">
+            <div class="flex-between"><span>📌 限价挂单簿 (开仓单)</span><span style="font-size:0.7rem;">触发条件: 市价触及即成交</span></div>
+            <div id="orderListContainer" style="max-height: 220px; overflow-y: auto; margin-top: 8px;">
+                <div style="color:#ac9e7e; text-align:center;">暂无挂单</div>
+            </div>
+        </div>
+        <div class="create-order">
+            <div style="font-weight:bold;">✨ 创建限价挂单 (开仓)</div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; align-items:center;">
+                <select id="orderCommodity" style="background:#3e2c1d; color:white; border-radius:30px; padding:6px;">
+                    <option value="pumpkin_seed">🎃 南瓜种子</option>
+                    <option value="apple_seed">🍎 苹果种子</option>
+                    <option value="pumpkin">🎃 南瓜</option>
+                    <option value="apple">🍎 苹果</option>
+                </select>
+                <select id="orderDirection">
+                    <option value="long">📈 买入开多 (限价)</option>
+                    <option value="short">📉 卖出开空 (限价)</option>
+                </select>
+                <input type="number" id="orderPrice" placeholder="价格" step="0.1" value="100">
+                <input type="number" id="orderQty" placeholder="数量" step="1" value="1" style="width:80px;">
+                <button id="placeOrderBtn" class="primary">➕ 挂单</button>
+            </div>
+            <div style="font-size:0.7rem; margin-top:6px; color:#e9c891;">※ 挂单成交时自动开仓，按挂单价格建立头寸</div>
+        </div>
+    </div>
+    <div class="log-box" id="logPanel">
+        📢 欢迎来到期货农场！ 多空博弈，7日强制交割。<br>
+        交易种子/作物，交割日按现价结算盈亏，统一收购方回购实物(自动清算)。<br>
+    </div>
+</div>
+
+<script>
+    // ----- 商品定义 -----
+    const COMMODITIES = [
+        { id: "pumpkin_seed", name: "🎃 南瓜种子", type: "seed" },
+        { id: "apple_seed", name: "🍎 苹果种子", type: "seed" },
+        { id: "pumpkin", name: "🎃 南瓜", type: "crop" },
+        { id: "apple", name: "🍎 苹果", type: "crop" }
+    ];
+
+    // 初始价格 (基准)
+    let prices = {
+        pumpkin_seed: 120.0,
+        apple_seed: 110.0,
+        pumpkin: 380.0,
+        apple: 350.0
+    };
+
+    // 持仓: 多仓 { qty, avgPrice }  空仓 { qty, avgPrice }
+    let positions = {
+        pumpkin_seed: { long: { qty: 0, avgPrice: 0 }, short: { qty: 0, avgPrice: 0 } },
+        apple_seed:   { long: { qty: 0, avgPrice: 0 }, short: { qty: 0, avgPrice: 0 } },
+        pumpkin:      { long: { qty: 0, avgPrice: 0 }, short: { qty: 0, avgPrice: 0 } },
+        apple:        { long: { qty: 0, avgPrice: 0 }, short: { qty: 0, avgPrice: 0 } }
+    };
+
+    // 现金
+    let cash = 100000.0;
+
+    // 日期 (1~7)
+    let currentDay = 1;
+
+    // 挂单列表: { id, commodityId, type: "long" or "short", price, quantity }
+    let pendingOrders = [];
+    let nextOrderId = 100;
+
+    // 日志队列
+    let logEntries = [];
+
+    // 辅助函数 添加日志
+    function addLog(msg, isError = false) {
+        logEntries.unshift(`[Day ${currentDay}] ${msg}`);
+        if (logEntries.length > 30) logEntries.pop();
+        const logDiv = document.getElementById("logPanel");
+        if (logDiv) {
+            logDiv.innerHTML = "📢 " + logEntries.map(l => l).join("<br>📢 ") + "<br>";
+            logDiv.scrollTop = 0;
+        }
+    }
+
+    // 计算总资产 (现金 + 浮动盈亏)
+    function computeTotalEquity() {
+        let floating = 0;
+        for (let comm of COMMODITIES) {
+            const id = comm.id;
+            const currPrice = prices[id];
+            const pos = positions[id];
+            // 多头浮动盈亏
+            if (pos.long.qty > 0) {
+                floating += (currPrice - pos.long.avgPrice) * pos.long.qty;
+            }
+            // 空头浮动盈亏
+            if (pos.short.qty > 0) {
+                floating += (pos.short.avgPrice - currPrice) * pos.short.qty;
+            }
+        }
+        return cash + floating;
+    }
+
+    // 更新所有UI
+    function refreshUI() {
+        // 现金/总资产
+        const equity = computeTotalEquity();
+        document.getElementById("cashDisplay").innerText = cash.toFixed(2);
+        document.getElementById("equityDisplay").innerText = equity.toFixed(2);
+        document.getElementById("dayCounter").innerHTML = `第${currentDay}天 / 7天轮回`;
+
+        // 商品表格渲染
+        const tbody = document.getElementById("marketTbody");
+        tbody.innerHTML = "";
+        for (let comm of COMMODITIES) {
+            const id = comm.id;
+            const price = prices[id];
+            const pos = positions[id];
+            const longQty = pos.long.qty;
+            const shortQty = pos.short.qty;
+            let floatPL = 0;
+            if (longQty > 0) floatPL += (price - pos.long.avgPrice) * longQty;
+            if (shortQty > 0) floatPL += (pos.short.avgPrice - price) * shortQty;
+            const plColor = floatPL >= 0 ? "style='color:#b3ffbc'" : "style='color:#ffbe9f'";
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td class="commodity-name">${comm.name}</td>
+                <td class="price">${price.toFixed(2)}</td>
+                <td>${longQty > 0 ? longQty + " (均价:"+pos.long.avgPrice.toFixed(2)+")" : "—"}</td>
+                <td>${shortQty > 0 ? shortQty + " (均价:"+pos.short.avgPrice.toFixed(2)+")" : "—"}</td>
+                <td ${plColor}>${floatPL >= 0 ? "+"+floatPL.toFixed(2) : floatPL.toFixed(2)}</td>
+                <td class="btn-group">
+                    <button class="marketLong" data-id="${id}">📈 开多</button>
+                    <button class="marketShort" data-id="${id}">📉 开空</button>
+                    <button class="closeLong" data-id="${id}">✅ 平多</button>
+                    <button class="closeShort" data-id="${id}">❌ 平空</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+
+        // 绑定动态按钮 (市价开平)
+        document.querySelectorAll(".marketLong").forEach(btn => {
+            btn.onclick = (e) => { const id = btn.dataset.id; openMarketPosition(id, "long"); };
+        });
+        document.querySelectorAll(".marketShort").forEach(btn => {
+            btn.onclick = (e) => { const id = btn.dataset.id; openMarketPosition(id, "short"); };
+        });
+        document.querySelectorAll(".closeLong").forEach(btn => {
+            btn.onclick = (e) => { const id = btn.dataset.id; closePosition(id, "long"); };
+        });
+        document.querySelectorAll(".closeShort").forEach(btn => {
+            btn.onclick = (e) => { const id = btn.dataset.id; closePosition(id, "short"); };
+        });
+
+        // 渲染持仓明细
+        const posDetailDiv = document.getElementById("positionsDetail");
+        posDetailDiv.innerHTML = "";
+        for (let comm of COMMODITIES) {
+            const id = comm.id;
+            const longPos = positions[id].long;
+            const shortPos = positions[id].short;
+            if (longPos.qty === 0 && shortPos.qty === 0) continue;
+            let text = `<span style="background:#2f3a24; border-radius:40px; padding:4px 10px;">${comm.name} : `;
+            if (longPos.qty > 0) text += `多 ${longPos.qty}手 @${longPos.avgPrice.toFixed(2)}  `;
+            if (shortPos.qty > 0) text += `空 ${shortPos.qty}手 @${shortPos.avgPrice.toFixed(2)}  `;
+            text += `</span>`;
+            posDetailDiv.innerHTML += text;
+        }
+        if (posDetailDiv.innerHTML === "") posDetailDiv.innerHTML = "<span style='opacity:0.7'>暂无持仓</span>";
+
+        // 渲染挂单列表
+        const orderContainer = document.getElementById("orderListContainer");
+        if (!pendingOrders.length) {
+            orderContainer.innerHTML = "<div style='color:#ac9e7e; text-align:center;'>暂无挂单</div>";
+        } else {
+            orderContainer.innerHTML = "";
+            pendingOrders.forEach(order => {
+                const commObj = COMMODITIES.find(c => c.id === order.commodityId);
+                const dirText = order.type === "long" ? "📈 买入开多" : "📉 卖出开空";
+                const div = document.createElement("div");
+                div.className = "order-item";
+                div.innerHTML = `
+                    <span><strong>${commObj.name}</strong> ${dirText}  ${order.quantity}手 @${order.price.toFixed(2)}</span>
+                    <button class="cancelOrderBtn" data-id="${order.id}" style="background:#8b3c2c;">✖️撤单</button>
+                `;
+                orderContainer.appendChild(div);
+            });
+            document.querySelectorAll(".cancelOrderBtn").forEach(btn => {
+                btn.onclick = (e) => {
+                    const oid = parseInt(btn.dataset.id);
+                    cancelOrder(oid);
+                };
+            });
+        }
+    }
+
+    // 市价开仓 (方向 long=做多, short=做空)
+    function openMarketPosition(commodityId, direction) {
+        const qtyInput = prompt(`输入开仓数量 (${direction === "long" ? "做多" : "做空"} 数量)`, "1");
+        if (!qtyInput) return;
+        let qty = parseFloat(qtyInput);
+        if (isNaN(qty) || qty <= 0) { addLog("❌ 数量无效", true); return; }
+        qty = Math.floor(qty); // 整数手
+        if (qty === 0) return;
+        const currentPrice = prices[commodityId];
+        const equityBefore = computeTotalEquity();
+        // 简易风控: 开仓后权益不得低于 -5000 (避免无限负资产,但允许适度亏损)
+        let tempCash = cash;
+        let tempPos = JSON.parse(JSON.stringify(positions));
+        if (direction === "long") {
+            const old = tempPos[commodityId].long;
+            const newTotalQty = old.qty + qty;
+            const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
+            tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg };
+        } else {
+            const old = tempPos[commodityId].short;
+            const newTotalQty = old.qty + qty;
+            const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
+            tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg };
+        }
+        // 估算新权益 (基于当前价格)
+        let newFloating = 0;
+        for (let c of COMMODITIES) {
+            const pid = c.id;
+            const pnow = prices[pid];
+            const lp = tempPos[pid].long;
+            if (lp.qty > 0) newFloating += (pnow - lp.avgPrice) * lp.qty;
+            const sp = tempPos[pid].short;
+            if (sp.qty > 0) newFloating += (sp.avgPrice - pnow) * sp.qty;
+        }
+        const newEquity = tempCash + newFloating;
+        if (newEquity < -5000) {
+            addLog(`⚠️ 风控拦截: 开仓后预计资产 ${newEquity.toFixed(2)} 过低, 禁止开仓`, true);
+            return;
+        }
+        // 执行开仓
+        if (direction === "long") {
+            const old = positions[commodityId].long;
+            const newTotal = old.qty + qty;
+            const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotal;
+            positions[commodityId].long = { qty: newTotal, avgPrice: newAvg };
+            addLog(`🎯 市价开多 ${COMMODITIES.find(c=>c.id===commodityId).name} ${qty}手 @ ${currentPrice.toFixed(2)}`);
+        } else {
+            const old = positions[commodityId].short;
+            const newTotal = old.qty + qty;
+            const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotal;
+            positions[commodityId].short = { qty: newTotal, avgPrice: newAvg };
+            addLog(`🎯 市价开空 ${COMMODITIES.find(c=>c.id===commodityId).name} ${qty}手 @ ${currentPrice.toFixed(2)}`);
+        }
+        refreshUI();
+    }
+
+    // 市价平仓
+    function closePosition(commodityId, direction) {
+        const pos = positions[commodityId][direction];
+        if (pos.qty === 0) { addLog(`无${direction==="long"?"多单":"空单"}可平`, true); return; }
+        const qtyInput = prompt(`平仓数量 (最多${pos.qty})`, pos.qty.toString());
+        if (!qtyInput) return;
+        let qty = parseFloat(qtyInput);
+        if (isNaN(qty) || qty <= 0) return;
+        qty = Math.min(Math.floor(qty), pos.qty);
+        if (qty === 0) return;
+        const currPrice = prices[commodityId];
+        let profit = 0;
+        if (direction === "long") {
+            profit = (currPrice - pos.avgPrice) * qty;
+            const newQty = pos.qty - qty;
+            if (newQty === 0) {
+                positions[commodityId].long = { qty: 0, avgPrice: 0 };
+            } else {
+                // 平均价不变（先进先出简化）
+                positions[commodityId].long = { qty: newQty, avgPrice: pos.avgPrice };
+            }
+        } else {
+            profit = (pos.avgPrice - currPrice) * qty;
+            const newQty = pos.qty - qty;
+            if (newQty === 0) {
+                positions[commodityId].short = { qty: 0, avgPrice: 0 };
+            } else {
+                positions[commodityId].short = { qty: newQty, avgPrice: pos.avgPrice };
+            }
+        }
+        cash += profit;
+        addLog(`💸 平仓 ${direction==="long"?"多单":"空单"} ${COMMODITIES.find(c=>c.id===commodityId).name} ${qty}手，盈亏: ${profit>=0?`+${profit.toFixed(2)}`:`${profit.toFixed(2)}`}`);
+        refreshUI();
+    }
+
+    // 挂单
+    function placeLimitOrder() {
+        const commodityId = document.getElementById("orderCommodity").value;
+        const direction = document.getElementById("orderDirection").value;
+        let price = parseFloat(document.getElementById("orderPrice").value);
+        let qty = parseFloat(document.getElementById("orderQty").value);
+        if (isNaN(price) || price <= 0 || isNaN(qty) || qty <= 0) { addLog("❌ 挂单价格/数量无效"); return; }
+        qty = Math.floor(qty);
+        if (qty === 0) return;
+        const order = {
+            id: nextOrderId++,
+            commodityId: commodityId,
+            type: direction, // "long" or "short"
+            price: price,
+            quantity: qty
+        };
+        pendingOrders.push(order);
+        addLog(`📌 挂单成功: ${COMMODITIES.find(c=>c.id===commodityId).name} ${direction==="long"?"买入开多":"卖出开空"} ${qty}手 @ ${price.toFixed(2)}`);
+        refreshUI();
+    }
+
+    function cancelOrder(orderId) {
+        const idx = pendingOrders.findIndex(o => o.id === orderId);
+        if (idx !== -1) {
+            const removed = pendingOrders[idx];
+            pendingOrders.splice(idx, 1);
+            addLog(`🗑️ 撤单: ${COMMODITIES.find(c=>c.id===removed.commodityId).name} ${removed.type==="long"?"多单挂单":"空单挂单"}`);
+            refreshUI();
+        }
+    }
+
+    // 检查挂单成交 (价格变动后调用)
+    function checkOrdersMatch() {
+        let anyMatched = false;
+        for (let i = 0; i < pendingOrders.length; i++) {
+            const order = pendingOrders[i];
+            const currentPrice = prices[order.commodityId];
+            let shouldMatch = false;
+            if (order.type === "long" && currentPrice <= order.price) shouldMatch = true;
+            if (order.type === "short" && currentPrice >= order.price) shouldMatch = true;
+            if (shouldMatch) {
+                // 成交挂单 开仓
+                const comm = COMMODITIES.find(c=>c.id===order.commodityId);
+                if (order.type === "long") {
+                    const old = positions[order.commodityId].long;
+                    const newQty = old.qty + order.quantity;
+                    const newAvg = (old.qty * old.avgPrice + order.quantity * order.price) / newQty;
+                    positions[order.commodityId].long = { qty: newQty, avgPrice: newAvg };
+                    addLog(`✅ 挂单成交: ${comm.name} 限价买入开多 ${order.quantity}手 @ ${order.price.toFixed(2)} (触发价${currentPrice.toFixed(2)})`);
+                } else {
+                    const old = positions[order.commodityId].short;
+                    const newQty = old.qty + order.quantity;
+                    const newAvg = (old.qty * old.avgPrice + order.quantity * order.price) / newQty;
+                    positions[order.commodityId].short = { qty: newQty, avgPrice: newAvg };
+                    addLog(`✅ 挂单成交: ${comm.name} 限价卖出开空 ${order.quantity}手 @ ${order.price.toFixed(2)} (触发价${currentPrice.toFixed(2)})`);
+                }
+                pendingOrders.splice(i,1);
+                i--;
+                anyMatched = true;
+            }
+        }
+        if(anyMatched) refreshUI();
+    }
+
+    // 价格随机波动 ±5%
+    function randomPriceMove() {
+        for (let comm of COMMODITIES) {
+            let oldPrice = prices[comm.id];
+            let change = (Math.random() - 0.5) * 0.1; // -5% ~ +5%
+            let newPrice = oldPrice * (1 + change);
+            newPrice = Math.max(0.5, newPrice);
+            prices[comm.id] = Math.round(newPrice * 100) / 100;
+        }
+        addLog(`🌱 新的一天，价格波动了~`);
+    }
+
+    // 交割日强制结算 (第7天执行)
+    function performDelivery() {
+        addLog(`🔥🔥🔥 【交割日】 第7天强制实物交割！统一收购方按交割价回购作物/种子 🔥🔥🔥`);
+        let totalSettlePL = 0;
+        for (let comm of COMMODITIES) {
+            const id = comm.id;
+            const deliveryPrice = prices[id];
+            const longPos = positions[id].long;
+            const shortPos = positions[id].short;
+            // 多头交割: 多方按交割价支付货款获得实物，收购方立即回购 => 净盈亏 (交割价 - 开仓均价)*数量
+            if (longPos.qty > 0) {
+                const profit = (deliveryPrice - longPos.avgPrice) * longPos.qty;
+                cash += profit;
+                totalSettlePL += profit;
+                addLog(`📦 ${comm.name} 多头${longPos.qty}手 交割盈利: ${profit>=0?`+${profit.toFixed(2)}`:`${profit.toFixed(2)}`} (收购方已回购)`);
+            }
+            if (shortPos.qty > 0) {
+                const profit = (shortPos.avgPrice - deliveryPrice) * shortPos.qty;
+                cash += profit;
+                totalSettlePL += profit;
+                addLog(`📦 ${comm.name} 空头${shortPos.qty}手 交割盈利: ${profit>=0?`+${profit.toFixed(2)}`:`${profit.toFixed(2)}`} (货款交割完成)`);
+            }
+            // 清空所有持仓
+            positions[id] = { long: { qty: 0, avgPrice: 0 }, short: { qty: 0, avgPrice: 0 } };
+        }
+        // 清空所有挂单 (到期失效)
+        pendingOrders = [];
+        addLog(`🎉 交割完毕! 本次交割总盈亏: ${totalSettlePL>=0?`+${totalSettlePL.toFixed(2)}`:`${totalSettlePL.toFixed(2)}`} 现金更新为 ${cash.toFixed(2)}`);
+        refreshUI();
+    }
+
+    // 下一天逻辑
+    function nextDay() {
+        if (currentDay === 7) {
+            // 已经是第7天，直接进行交割，然后重置轮回（日期回到1）
+            performDelivery();
+            currentDay = 1;
+            // 交割后价格保持原样(不额外波动)，新轮回开始
+            addLog(`🌾 新轮回开启 第1天，市场价格延续昨日收盘价，祝您好运！`);
+            refreshUI();
+        } else {
+            // 非交割日: 价格波动 -> 日期+1 -> 检查挂单
+            randomPriceMove();
+            currentDay++;
+            // 价格变动后检查挂单成交
+            checkOrdersMatch();
+            addLog(`⏩ 进入第 ${currentDay} 天`);
+            refreshUI();
+        }
+    }
+
+    // 重置整个游戏
+    function resetGame() {
+        cash = 100000.0;
+        currentDay = 1;
+        // 重置价格
+        prices = {
+            pumpkin_seed: 120.0,
+            apple_seed: 110.0,
+            pumpkin: 380.0,
+            apple: 350.0
+        };
+        for (let comm of COMMODITIES) {
+            positions[comm.id] = { long: { qty: 0, avgPrice: 0 }, short: { qty: 0, avgPrice: 0 } };
+        }
+        pendingOrders = [];
+        nextOrderId = 100;
+        logEntries = [];
+        addLog("🔄 游戏已重置。初始资金10万，新一轮7天周期开始！");
+        refreshUI();
+    }
+
+    // 绑定全局按钮事件
+    document.getElementById("nextDayBtn").addEventListener("click", () => nextDay());
+    document.getElementById("resetGameBtn").addEventListener("click", () => resetGame());
+    document.getElementById("placeOrderBtn").addEventListener("click", () => placeLimitOrder());
+
+    // 初始渲染
+    refreshUI();
+    addLog("✨ 提示: 可挂限价单，市价开平，第7天强制按现价交割并统一收购。祝交易顺利！");
+</script>
+</body>
+</html>
