@@ -1,0 +1,484 @@
+import { computeEquity } from "./logic.js";
+import { DEFAULT_PLAYER_ID, getActivePlayer, normalizePlayerId } from "./state.js";
+
+const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
+
+/**
+ * @param {HTMLElement} root
+ * @param {object} ctx
+ * @param {import('./config.js').GAME_CONFIG} ctx.config
+ * @param {() => object} ctx.getGameState
+ * @param {(a: import('./logic.js').GameAction) => void} ctx.dispatch
+ * @param {ReturnType<import('./room.js').createLocalRoomTransport>} ctx.transport
+ * @param {(view: 'start'|'room'|'game') => void} ctx.setCurrentView
+ * @param {() => 'start'|'room'|'game'} ctx.getCurrentView
+ * @param {(playerId?: string, soloWithAI?: boolean) => void} ctx.onEnterGame
+ */
+export function mountApp(root, ctx) {
+  const { config, getGameState, dispatch, transport, setCurrentView, getCurrentView, onEnterGame } = ctx;
+
+  const playerIdInput = /** @type {HTMLInputElement | null} */ (root.querySelector("#playerIdInput"));
+
+  const viewStart = /** @type {HTMLElement} */ (root.querySelector("#view-start"));
+  const viewRoom = /** @type {HTMLElement} */ (root.querySelector("#view-room"));
+  const viewGame = /** @type {HTMLElement} */ (root.querySelector("#view-game"));
+
+  const roomIdEl = root.querySelector("#roomIdDisplay");
+  const roomPlayersEl = root.querySelector("#roomPlayersList");
+  const roomStatusEl = root.querySelector("#roomStatusText");
+  const joinRoomInput = /** @type {HTMLInputElement | null} */ (root.querySelector("#joinRoomInput"));
+  const btnCreateRoom = root.querySelector("#btnCreateRoom");
+  const btnJoinRoom = root.querySelector("#btnJoinRoom");
+  const btnSolo = root.querySelector("#btnSolo");
+  const btnRoomReady = root.querySelector("#btnRoomReady");
+  const btnRoomLeave = root.querySelector("#btnRoomLeave");
+  const btnHostStart = root.querySelector("#btnHostStart");
+
+  const orderLimitSection = /** @type {HTMLElement | null} */ (root.querySelector("#orderLimitSection"));
+
+  const gameEndOverlay = root.querySelector("#gameEndOverlay");
+  const gameEndRankList = root.querySelector("#gameEndRankList");
+  const gameEndSub = root.querySelector("#gameEndSub");
+  const gameEndCloseBtn = root.querySelector("#gameEndCloseBtn");
+
+  /** 用户关闭终局排名弹窗后，不再在每次 render 时强制弹出 */
+  let endModalDismissed = false;
+
+  if (playerIdInput) {
+    try {
+      const saved = localStorage.getItem(PLAYER_ID_STORAGE_KEY);
+      if (saved != null) playerIdInput.value = saved;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function persistPlayerId() {
+    if (!playerIdInput) return;
+    try {
+      localStorage.setItem(PLAYER_ID_STORAGE_KEY, playerIdInput.value.trim());
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function getResolvedPlayerId() {
+    if (!playerIdInput) return DEFAULT_PLAYER_ID;
+    return normalizePlayerId(playerIdInput.value) ?? DEFAULT_PLAYER_ID;
+  }
+
+  function showView(name) {
+    setCurrentView(name);
+    viewStart.classList.toggle("hidden", name !== "start");
+    viewRoom.classList.toggle("hidden", name !== "room");
+    viewGame.classList.toggle("hidden", name !== "game");
+    if (orderLimitSection) {
+      orderLimitSection.classList.toggle("hidden", !config.features?.limitOrders);
+    }
+    if (name === "game") renderGame();
+    if (name === "room") renderRoom();
+  }
+
+  function renderGame() {
+    const state = getGameState();
+    const player = getActivePlayer(state);
+    const equity = computeEquity(state, config);
+    const gameOver = !!state.gameEnded;
+    if (!gameOver) {
+      endModalDismissed = false;
+    }
+    const totalGameDays = config.rules?.totalGameDays ?? 28;
+    const globalDay = state.globalDay ?? state.currentDay;
+
+    const cashDisplay = viewGame.querySelector("#cashDisplay");
+    const equityDisplay = viewGame.querySelector("#equityDisplay");
+    const dayCounter = viewGame.querySelector("#dayCounter");
+    const playerStatusDisplay = viewGame.querySelector("#playerStatusDisplay");
+    const backpackSeedsRow = viewGame.querySelector("#backpackSeedsRow");
+    const backpackCropsRow = viewGame.querySelector("#backpackCropsRow");
+    const spotPoolDisplay = viewGame.querySelector("#spotPoolDisplay");
+    if (cashDisplay) cashDisplay.textContent = player.cash.toFixed(2);
+    if (equityDisplay) equityDisplay.textContent = equity.toFixed(2);
+    if (dayCounter) {
+      dayCounter.innerHTML = `第${globalDay}天 / ${totalGameDays}天 · 轮回第${state.currentDay}天 / 7`;
+    }
+    if (playerStatusDisplay) {
+      if (gameOver) {
+        playerStatusDisplay.textContent = "已结束";
+        playerStatusDisplay.style.color = "#9ed98b";
+      } else {
+        playerStatusDisplay.textContent = player.status === "failed" ? "已失败" : "进行中";
+        playerStatusDisplay.style.color = player.status === "failed" ? "#ff8a7a" : "#ffd966";
+      }
+    }
+    if (backpackSeedsRow) {
+      backpackSeedsRow.innerHTML = "";
+      const seeds = config.commodities.filter((c) => c.type === "seed");
+      const disabled = player.status === "failed" || gameOver;
+      for (const comm of seeds) {
+        const n = player.backpack[comm.id] ?? 0;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "backpack-seed-btn";
+        btn.setAttribute("data-seed-id", comm.id);
+        btn.textContent = `${comm.name} ×${n}`;
+        btn.disabled = disabled || n <= 0;
+        backpackSeedsRow.appendChild(btn);
+      }
+    }
+    if (backpackCropsRow) {
+      backpackCropsRow.innerHTML = "";
+      const crops = config.commodities.filter((c) => c.type === "crop");
+      if (crops.length === 0) {
+        backpackCropsRow.innerHTML = "<span style='opacity:0.7'>—</span>";
+      } else {
+        for (const comm of crops) {
+          const n = player.backpack[comm.id] ?? 0;
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "backpack-crop-btn";
+          btn.setAttribute("data-crop-id", comm.id);
+          btn.textContent = `${comm.name} ×${n}`;
+          btn.disabled = player.status === "failed" || n <= 0 || gameOver;
+          backpackCropsRow.appendChild(btn);
+        }
+      }
+    }
+    if (spotPoolDisplay) {
+      const crops = config.commodities.filter((c) => c.type === "crop");
+      spotPoolDisplay.textContent = crops.map((c) => `${c.name} ${state.spotPool[c.id] ?? 0}`).join(" · ");
+    }
+
+    const tbody = viewGame.querySelector("#marketTbody");
+    if (tbody) {
+      tbody.innerHTML = "";
+      for (const comm of config.commodities) {
+        const id = comm.id;
+        const price = state.prices[id];
+        const pos = player.positions[id];
+        const longQty = pos.long.qty;
+        const shortQty = pos.short.qty;
+        let floatPL = 0;
+        if (longQty > 0) floatPL += (price - pos.long.avgPrice) * longQty;
+        if (shortQty > 0) floatPL += (pos.short.avgPrice - price) * shortQty;
+        const plColor = floatPL >= 0 ? "style='color:#b3ffbc'" : "style='color:#ffbe9f'";
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+                <td class="commodity-name">${comm.name}</td>
+                <td class="price">${price.toFixed(2)}</td>
+                <td>${longQty > 0 ? longQty + " (均价:" + pos.long.avgPrice.toFixed(2) + ")" : "—"}</td>
+                <td>${shortQty > 0 ? shortQty + " (均价:" + pos.short.avgPrice.toFixed(2) + ")" : "—"}</td>
+                <td ${plColor}>${floatPL >= 0 ? "+" + floatPL.toFixed(2) : floatPL.toFixed(2)}</td>
+                <td class="btn-group">
+                    <button type="button" data-action="market-long" data-commodity-id="${id}">📈 开多</button>
+                    <button type="button" data-action="market-short" data-commodity-id="${id}">📉 开空</button>
+                    <button type="button" data-action="close-long" data-commodity-id="${id}">✅ 平多</button>
+                    <button type="button" data-action="close-short" data-commodity-id="${id}">❌ 平空</button>
+                </td>
+            `;
+        if (gameOver) {
+          tr.querySelectorAll("button").forEach((b) => {
+            b.disabled = true;
+          });
+        }
+        tbody.appendChild(tr);
+      }
+    }
+
+    const posDetailDiv = viewGame.querySelector("#positionsDetail");
+    if (posDetailDiv) {
+      posDetailDiv.innerHTML = "";
+      for (const comm of config.commodities) {
+        const id = comm.id;
+        const longPos = player.positions[id].long;
+        const shortPos = player.positions[id].short;
+        if (longPos.qty === 0 && shortPos.qty === 0) continue;
+        let text = `<span style="background:#2f3a24; border-radius:40px; padding:4px 10px;">${comm.name} : `;
+        if (longPos.qty > 0) text += `多 ${longPos.qty}手 @${longPos.avgPrice.toFixed(2)}  `;
+        if (shortPos.qty > 0) text += `空 ${shortPos.qty}手 @${shortPos.avgPrice.toFixed(2)}  `;
+        text += `</span>`;
+        posDetailDiv.innerHTML += text;
+      }
+      if (posDetailDiv.innerHTML === "") posDetailDiv.innerHTML = "<span style='opacity:0.7'>暂无持仓</span>";
+    }
+
+    if (config.features?.limitOrders) {
+      const orderContainer = viewGame.querySelector("#orderListContainer");
+      if (orderContainer) {
+        if (!player.pendingOrders.length) {
+          orderContainer.innerHTML = "<div style='color:#ac9e7e; text-align:center;'>暂无挂单</div>";
+        } else {
+          orderContainer.innerHTML = "";
+          player.pendingOrders.forEach((order) => {
+            const commObj = config.commodities.find((c) => c.id === order.commodityId);
+            const name = commObj ? commObj.name : order.commodityId;
+            const dirText = order.type === "long" ? "📈 买入开多" : "📉 卖出开空";
+            const div = document.createElement("div");
+            div.className = "order-item";
+            div.innerHTML = `
+                    <span><strong>${name}</strong> ${dirText}  ${order.quantity}手 @${order.price.toFixed(2)}</span>
+                    <button type="button" class="cancelOrderBtn" data-action="cancel-order" data-order-id="${order.id}" style="background:#8b3c2c;" ${gameOver ? "disabled" : ""}>✖️撤单</button>
+                `;
+            orderContainer.appendChild(div);
+          });
+        }
+      }
+    }
+
+    const logPanel = viewGame.querySelector("#logPanel");
+    if (logPanel) {
+      logPanel.innerHTML =
+        "📢 " + state.logEntries.map((l) => l).join("<br>📢 ") + (state.logEntries.length ? "<br>" : "");
+      logPanel.scrollTop = 0;
+    }
+
+    const nextDayBtnEl = viewGame.querySelector("#nextDayBtn");
+    if (nextDayBtnEl) {
+      nextDayBtnEl.disabled = gameOver;
+    }
+    const placeOrderBtnEl = viewGame.querySelector("#placeOrderBtn");
+    if (placeOrderBtnEl) {
+      placeOrderBtnEl.disabled = gameOver;
+    }
+
+    if (gameEndOverlay && gameEndRankList && gameEndSub) {
+      if (gameOver && state.finalRanking && state.finalRanking.length && !endModalDismissed) {
+        gameEndSub.textContent = `第 ${totalGameDays} 天交割结算已完成，背包作物已按市价强制卖出（种子保留）。最终排名按现金：`;
+        gameEndRankList.innerHTML = state.finalRanking
+          .map(
+            (r, i) =>
+              `<li><strong>${i + 1}.</strong> 玩家 <span class="rank-id">${escapeHtml(r.playerId)}</span> — 现金 <span class="rank-cash">¥${r.cash.toFixed(2)}</span></li>`
+          )
+          .join("");
+        gameEndOverlay.classList.remove("hidden");
+        gameEndOverlay.setAttribute("aria-hidden", "false");
+      } else {
+        gameEndOverlay.classList.add("hidden");
+        gameEndOverlay.setAttribute("aria-hidden", "true");
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderRoom() {
+    const s = transport.getSession();
+    if (!s) {
+      if (roomStatusEl) roomStatusEl.textContent = "";
+      return;
+    }
+    if (roomIdEl) roomIdEl.textContent = s.roomId;
+    if (roomPlayersEl) {
+      roomPlayersEl.innerHTML = s.players
+        .map((p) => {
+          const local = transport.getLocalPlayerId() === p.id ? " (我)" : "";
+          return `<div class="room-player">${p.displayName}${local} — ${p.ready ? "已就绪" : "未就绪"}</div>`;
+        })
+        .join("");
+    }
+    const host = transport.isHost();
+    if (btnHostStart) {
+      btnHostStart.style.display = host ? "inline-block" : "none";
+    }
+    if (roomStatusEl) {
+      roomStatusEl.textContent = s.gameStarted ? "游戏进行中" : "等待就绪";
+    }
+  }
+
+  function promptQty(title, defaultVal) {
+    const v = window.prompt(title, defaultVal);
+    if (v == null || v === "") return null;
+    const n = parseFloat(v);
+    if (isNaN(n) || n <= 0) return null;
+    return Math.floor(n);
+  }
+
+  if (btnCreateRoom) {
+    btnCreateRoom.addEventListener("click", () => {
+      persistPlayerId();
+      transport.createRoom(getResolvedPlayerId());
+      showView("room");
+    });
+  }
+  if (btnJoinRoom && joinRoomInput) {
+    btnJoinRoom.addEventListener("click", () => {
+      persistPlayerId();
+      const r = transport.joinRoom(joinRoomInput.value, getResolvedPlayerId());
+      if (!r.ok) {
+        alert(r.error || "加入失败");
+        return;
+      }
+      showView("room");
+    });
+  }
+  if (btnSolo) {
+    btnSolo.addEventListener("click", () => {
+      persistPlayerId();
+      onEnterGame(getResolvedPlayerId(), true);
+      showView("game");
+    });
+  }
+  if (btnRoomReady) {
+    btnRoomReady.addEventListener("click", () => {
+      const s = transport.getSession();
+      const me = transport.getLocalPlayerId();
+      if (!s || !me) return;
+      const p = s.players.find((x) => x.id === me);
+      transport.setReady(!(p && p.ready));
+      renderRoom();
+    });
+  }
+  if (btnRoomLeave) {
+    btnRoomLeave.addEventListener("click", () => {
+      transport.leaveRoom();
+      showView("start");
+    });
+  }
+  viewGame.addEventListener("click", (e) => {
+    const seedBtn = /** @type {HTMLElement | null} */ (e.target).closest("button[data-seed-id]");
+    if (seedBtn) {
+      const seedId = seedBtn.getAttribute("data-seed-id");
+      if (!seedId) return;
+      const state = getGameState();
+      const pl = getActivePlayer(state);
+      const maxQ = pl.backpack[seedId] ?? 0;
+      if (maxQ <= 0 || pl.status === "failed") return;
+      const qty = promptQty(`使用种子数量 (最多 ${maxQ})`, "1");
+      if (qty == null) return;
+      if (qty > maxQ) {
+        alert(`数量不能超过持有量 ${maxQ}`);
+        return;
+      }
+      dispatch({ type: "USE_SEED", seedId, qty });
+      renderGame();
+      return;
+    }
+
+    const cropBtn = /** @type {HTMLElement | null} */ (e.target).closest("button[data-crop-id]");
+    if (cropBtn) {
+      const cropId = cropBtn.getAttribute("data-crop-id");
+      if (!cropId) return;
+      const state = getGameState();
+      const pl = getActivePlayer(state);
+      const maxQ = pl.backpack[cropId] ?? 0;
+      if (maxQ <= 0 || pl.status === "failed") return;
+      const price = state.prices[cropId];
+      const qty = promptQty(`卖出现货数量 (最多 ${maxQ})，现价 ${price.toFixed(2)}`, "1");
+      if (qty == null) return;
+      if (qty > maxQ) {
+        alert(`数量不能超过持有量 ${maxQ}`);
+        return;
+      }
+      dispatch({ type: "SELL_CROP_SPOT", commodityId: cropId, qty });
+      renderGame();
+    }
+  });
+
+  if (btnHostStart) {
+    btnHostStart.addEventListener("click", () => {
+      const r = transport.hostStartGame();
+      if (!r.ok) {
+        alert(r.error || "无法开始");
+        return;
+      }
+      persistPlayerId();
+      onEnterGame(getResolvedPlayerId(), false);
+      showView("game");
+    });
+  }
+
+  const marketTbody = viewGame.querySelector("#marketTbody");
+  if (marketTbody) {
+    marketTbody.addEventListener("click", (e) => {
+      const btn = /** @type {HTMLElement | null} */ (e.target).closest("button[data-action]");
+      if (!btn) return;
+      const action = btn.getAttribute("data-action");
+      const commodityId = btn.getAttribute("data-commodity-id");
+      if (!commodityId) return;
+
+      if (action === "market-long" || action === "market-short") {
+        const dir = action === "market-long" ? "long" : "short";
+        const qty = promptQty(`输入开仓数量 (${dir === "long" ? "做多" : "做空"} 数量)`, "1");
+        if (qty == null) return;
+        dispatch({ type: "OPEN_MARKET", commodityId, direction: dir, qty });
+        renderGame();
+      } else if (action === "close-long" || action === "close-short") {
+        const dir = action === "close-long" ? "long" : "short";
+        const state = getGameState();
+        const pl = getActivePlayer(state);
+        const maxQ = pl.positions[commodityId][dir].qty;
+        if (maxQ === 0) return;
+        const qty = promptQty(`平仓数量 (最多${maxQ})`, String(maxQ));
+        if (qty == null) return;
+        dispatch({ type: "CLOSE", commodityId, direction: dir, qty });
+        renderGame();
+      }
+    });
+  }
+
+  const orderListContainer = viewGame.querySelector("#orderListContainer");
+  if (orderListContainer && config.features?.limitOrders) {
+    orderListContainer.addEventListener("click", (e) => {
+      const btn = /** @type {HTMLElement | null} */ (e.target).closest("button[data-action='cancel-order']");
+      if (!btn) return;
+      const id = parseInt(btn.getAttribute("data-order-id") || "", 10);
+      if (isNaN(id)) return;
+      dispatch({ type: "CANCEL_ORDER", orderId: id });
+      renderGame();
+    });
+  }
+
+  const nextDayBtn = viewGame.querySelector("#nextDayBtn");
+  const resetGameBtn = viewGame.querySelector("#resetGameBtn");
+  const placeOrderBtn = viewGame.querySelector("#placeOrderBtn");
+
+  if (gameEndCloseBtn && gameEndOverlay) {
+    gameEndCloseBtn.addEventListener("click", () => {
+      endModalDismissed = true;
+      gameEndOverlay.classList.add("hidden");
+      gameEndOverlay.setAttribute("aria-hidden", "true");
+    });
+  }
+
+  if (nextDayBtn) {
+    nextDayBtn.addEventListener("click", () => {
+      dispatch({ type: "NEXT_DAY" });
+      renderGame();
+    });
+  }
+  if (resetGameBtn) {
+    resetGameBtn.addEventListener("click", () => {
+      dispatch({ type: "RESET" });
+      renderGame();
+    });
+  }
+  if (placeOrderBtn && config.features?.limitOrders) {
+    placeOrderBtn.addEventListener("click", () => {
+      const commodityEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#orderCommodity"));
+      const dirEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#orderDirection"));
+      const priceEl = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#orderPrice"));
+      const qtyEl = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#orderQty"));
+      if (!commodityEl || !dirEl || !priceEl || !qtyEl) return;
+      const commodityId = commodityEl.value;
+      const direction = /** @type {'long'|'short'} */ (dirEl.value);
+      const price = parseFloat(priceEl.value);
+      const qty = parseFloat(qtyEl.value);
+      dispatch({ type: "PLACE_LIMIT", commodityId, direction, price, qty });
+      renderGame();
+    });
+  }
+
+  transport.onStateChange(() => {
+    if (getCurrentView() === "room") renderRoom();
+  });
+
+  showView("start");
+
+  return { showView, renderGame, renderRoom };
+}
