@@ -1,6 +1,5 @@
 import { computeEquity } from "./logic.js";
 import { DEFAULT_PLAYER_ID, getActivePlayer, normalizePlayerId } from "./state.js";
-import { useFirebaseRoom } from "./room-mode.js";
 
 const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
 
@@ -11,12 +10,12 @@ const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
  * @param {() => object} ctx.getGameState
  * @param {(a: import('./logic.js').GameAction) => void} ctx.dispatch
  * @param {ReturnType<import('./room.js').createLocalRoomTransport>} ctx.transport
- * @param {'local'|'firebase'} [ctx.roomBackend]
+ * @param {'local'|'playroom'} [ctx.roomBackend]
  * @param {(view: 'start'|'room'|'game') => void} ctx.setCurrentView
  * @param {() => 'start'|'room'|'game'} ctx.getCurrentView
  * @param {(playerId?: string, soloWithAI?: boolean, mp?: { humanPlayerIds?: string[], multiplayerWithBots?: boolean }) => void} ctx.onEnterGame
- * @param {(renderGame: () => void | Promise<void>) => Promise<void>} [ctx.beginFirebaseGameSync]
- * @param {() => void} [ctx.stopFirebaseGameSync]
+ * @param {(renderGame: () => void | Promise<void>) => Promise<void>} [ctx.beginOnlineGameSync]
+ * @param {() => void} [ctx.stopOnlineGameSync]
  */
 export function mountApp(root, ctx) {
   const {
@@ -28,13 +27,10 @@ export function mountApp(root, ctx) {
     setCurrentView,
     getCurrentView,
     onEnterGame,
-    beginFirebaseGameSync,
-    stopFirebaseGameSync,
+    beginOnlineGameSync,
+    stopOnlineGameSync,
   } = ctx;
-  const isFirebaseRoom = roomBackend === "firebase" || useFirebaseRoom();
-
-  /** Firestore 多人：同一房间对局只自动进入一次 */
-  let firebaseGameEnteredKey = "";
+  const isPlayroomOnline = roomBackend === "playroom";
 
   const playerIdInput = /** @type {HTMLInputElement | null} */ (root.querySelector("#playerIdInput"));
 
@@ -52,6 +48,7 @@ export function mountApp(root, ctx) {
   const btnRoomReady = root.querySelector("#btnRoomReady");
   const btnRoomLeave = root.querySelector("#btnRoomLeave");
   const btnHostStart = root.querySelector("#btnHostStart");
+  const btnPlayroomOnline = root.querySelector("#btnPlayroomOnline");
 
   const orderLimitSection = /** @type {HTMLElement | null} */ (root.querySelector("#orderLimitSection"));
 
@@ -86,6 +83,13 @@ export function mountApp(root, ctx) {
     return normalizePlayerId(playerIdInput.value) ?? DEFAULT_PLAYER_ID;
   }
 
+  root.querySelectorAll(".local-only").forEach((el) => {
+    el.classList.toggle("hidden", isPlayroomOnline);
+  });
+  root.querySelectorAll(".playroom-only").forEach((el) => {
+    el.classList.toggle("hidden", !isPlayroomOnline);
+  });
+
   function showView(name) {
     setCurrentView(name);
     viewStart.classList.toggle("hidden", name !== "start");
@@ -103,7 +107,7 @@ export function mountApp(root, ctx) {
     if (state.multiplayerWithBots && !state.gameEnded) {
       const prog = transport.getNextDayProgress(state);
       if (prog.total > 0 && prog.ready === prog.total) {
-        const guestSkipNextDay = isFirebaseRoom && typeof transport.isHost === "function" && !transport.isHost();
+        const guestSkipNextDay = isPlayroomOnline && typeof transport.isHost === "function" && !transport.isHost();
         if (!guestSkipNextDay) {
           dispatch({ type: "NEXT_DAY" });
           await Promise.resolve(transport.clearNextDayReady(true));
@@ -306,24 +310,6 @@ export function mountApp(root, ctx) {
       .replace(/"/g, "&quot;");
   }
 
-  function tryEnterFirebaseMultiplayerGame() {
-    if (!isFirebaseRoom) return;
-    const s = transport.getSession();
-    if (!s?.gameStarted || getCurrentView() !== "room") return;
-    const key = `${s.roomId}:started`;
-    if (firebaseGameEnteredKey === key) return;
-    firebaseGameEnteredKey = key;
-    const humanPlayerIds = s.players.map((p) => p.id);
-    onEnterGame(getResolvedPlayerId(), false, {
-      humanPlayerIds,
-      multiplayerWithBots: true,
-    });
-    showView("game");
-    if (beginFirebaseGameSync) {
-      void beginFirebaseGameSync(renderGame);
-    }
-  }
-
   function renderRoom() {
     const s = transport.getSession();
     if (!s) {
@@ -345,7 +331,7 @@ export function mountApp(root, ctx) {
     }
     if (roomStatusEl) {
       const base = s.gameStarted ? "游戏进行中" : "等待就绪";
-      roomStatusEl.textContent = isFirebaseRoom ? `${base} · Firestore 联机` : base;
+      roomStatusEl.textContent = isPlayroomOnline ? `${base} · Playroom` : base;
     }
   }
 
@@ -409,8 +395,7 @@ export function mountApp(root, ctx) {
   if (btnRoomLeave) {
     btnRoomLeave.addEventListener("click", async () => {
       try {
-        firebaseGameEnteredKey = "";
-        stopFirebaseGameSync?.();
+        stopOnlineGameSync?.();
         await Promise.resolve(transport.leaveRoom());
       } catch (e) {
         console.error(e);
@@ -458,6 +443,30 @@ export function mountApp(root, ctx) {
     }
   });
 
+  if (btnPlayroomOnline && typeof transport.startLobby === "function") {
+    btnPlayroomOnline.addEventListener("click", async () => {
+      try {
+        await transport.startLobby();
+        const P = globalThis.Playroom;
+        if (!P) throw new Error("Playroom 未就绪");
+        const humanPlayerIds = Object.values(P.getParticipants())
+          .map((p) => p.id)
+          .sort((a, b) => String(a).localeCompare(String(b)));
+        onEnterGame(P.myPlayer().id, false, {
+          humanPlayerIds,
+          multiplayerWithBots: true,
+        });
+        showView("game");
+        if (beginOnlineGameSync) {
+          void beginOnlineGameSync(renderGame);
+        }
+      } catch (e) {
+        console.error(e);
+        alert(e instanceof Error ? e.message : "联机失败");
+      }
+    });
+  }
+
   if (btnHostStart) {
     btnHostStart.addEventListener("click", async () => {
       try {
@@ -467,8 +476,7 @@ export function mountApp(root, ctx) {
           return;
         }
         persistPlayerId();
-        if (isFirebaseRoom) {
-          // 全员由 onStateChange + tryEnterFirebaseMultiplayerGame 进入游戏
+        if (isPlayroomOnline) {
           return;
         }
         const sess = transport.getSession();
@@ -585,7 +593,6 @@ export function mountApp(root, ctx) {
   transport.onStateChange(() => {
     if (getCurrentView() === "room") {
       renderRoom();
-      tryEnterFirebaseMultiplayerGame();
     }
     if (getCurrentView() === "game") renderGame();
   });

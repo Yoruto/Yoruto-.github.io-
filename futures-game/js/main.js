@@ -2,25 +2,55 @@ import { GAME_CONFIG } from "./config.js";
 import { createInitialGameState, cloneGameState } from "./state.js";
 import { reduce } from "./logic.js";
 import { createLocalRoomTransport } from "./room.js";
+import { createPlayroomRoomTransport } from "./room-playroom.js";
 import { mountApp } from "./ui.js";
-import { useFirebaseRoom } from "./room-mode.js";
+import { useLocalRoom } from "./room-mode.js";
+import { PLAYROOM_CONFIG } from "./playroom-config.js";
+import * as playroomSync from "./game-sync-playroom.js";
 
 const root = document.getElementById("app");
 if (!root) throw new Error("Missing #app");
 
 let gameState = createInitialGameState();
 
-/** @type {ReturnType<createLocalRoomTransport> | Awaited<ReturnType<typeof import('./room-firebase.js').createFirebaseRoomTransport>> | null} */
+/** @type {ReturnType<createLocalRoomTransport> | ReturnType<createPlayroomRoomTransport> | null} */
 let transport = null;
+
+function isPlayroomTransport() {
+  return transport != null && typeof transport.startLobby === "function";
+}
 
 /** @type {(() => void) | null} */
 let unsubSharedGame = null;
 /** @type {(() => void) | null} */
 let unsubIntents = null;
-/** @type {Set<string>} */
-const processedIntentIds = new Set();
+/** @type {(() => void) | null} */
+let unsubHostRpc = null;
 
-function stopFirebaseGameSync() {
+const appRender = {
+  /** @type {() => void | Promise<void>} */
+  renderGame: () => {},
+};
+
+playroomSync.setPlayroomSyncContext({
+  getGameState: () => gameState,
+  setGameState: (s) => {
+    gameState = s;
+  },
+  getTransport: () => transport,
+  getConfig: () => GAME_CONFIG,
+  reduce: (s, a) => {
+    reduce(s, a, GAME_CONFIG);
+  },
+  cloneGameState,
+  renderGame: () => void appRender.renderGame(),
+});
+
+if (typeof globalThis.Playroom !== "undefined") {
+  unsubHostRpc = playroomSync.registerHostIntentRpc();
+}
+
+function stopOnlineGameSync() {
   if (unsubSharedGame) {
     unsubSharedGame();
     unsubSharedGame = null;
@@ -29,22 +59,20 @@ function stopFirebaseGameSync() {
     unsubIntents();
     unsubIntents = null;
   }
-  processedIntentIds.clear();
 }
 
 /**
  * @param {import('./logic.js').GameAction} action
  */
 function dispatch(action) {
-  if (useFirebaseRoom() && gameState.multiplayerWithBots && transport) {
+  if (isPlayroomTransport() && gameState.multiplayerWithBots && transport) {
     const isHost = typeof transport.isHost === "function" && transport.isHost();
     const roomId = typeof transport.getRoomId === "function" ? transport.getRoomId() : null;
     if (roomId && !isHost) {
       const me = transport.getLocalPlayerId?.();
       if (me) {
         void (async () => {
-          const mod = await import("./game-sync-firebase.js");
-          await mod.addGameIntent(roomId, me, action);
+          await playroomSync.addGameIntent(roomId, me, action);
         })();
       }
       return;
@@ -55,13 +83,12 @@ function dispatch(action) {
 }
 
 function hostPushSharedStateIfNeeded() {
-  if (!useFirebaseRoom() || !gameState.multiplayerWithBots || !transport) return;
+  if (!isPlayroomTransport() || !gameState.multiplayerWithBots || !transport) return;
   if (typeof transport.isHost !== "function" || !transport.isHost()) return;
   const roomId = transport.getRoomId?.();
   if (!roomId) return;
   void (async () => {
-    const mod = await import("./game-sync-firebase.js");
-    await mod.writeSharedGameState(roomId, cloneGameState(gameState));
+    await playroomSync.writeSharedGameState(roomId, cloneGameState(gameState));
   })();
 }
 
@@ -92,40 +119,17 @@ let currentView = "start";
 /**
  * @param {() => void | Promise<void>} renderGame
  */
-async function beginFirebaseGameSync(renderGame) {
-  stopFirebaseGameSync();
-  if (!useFirebaseRoom() || !gameState.multiplayerWithBots || !transport) return;
+async function beginOnlineGameSync(renderGame) {
+  stopOnlineGameSync();
+  if (!isPlayroomTransport() || !gameState.multiplayerWithBots || !transport) return;
   const roomId = transport.getRoomId?.();
   if (!roomId) return;
 
-  const mod = await import("./game-sync-firebase.js");
-
   if (transport.isHost?.()) {
-    await mod.writeSharedGameState(roomId, cloneGameState(gameState));
-    unsubIntents = mod.subscribeIntents(roomId, async (docSnap) => {
-      if (processedIntentIds.has(docSnap.id)) return;
-      processedIntentIds.add(docSnap.id);
-      const data = docSnap.data();
-      const playerId = data.playerId;
-      const action = data.action;
-      if (!playerId || !action) {
-        await mod.deleteIntentDoc(docSnap);
-        return;
-      }
-      const localId = transport.getLocalPlayerId?.() ?? null;
-      const prev = gameState.activePlayerId;
-      gameState.activePlayerId = playerId;
-      try {
-        reduce(gameState, action, GAME_CONFIG);
-      } finally {
-        if (localId) gameState.activePlayerId = localId;
-      }
-      await mod.deleteIntentDoc(docSnap);
-      await mod.writeSharedGameState(roomId, cloneGameState(gameState));
-      void renderGame();
-    });
+    await playroomSync.writeSharedGameState(roomId, cloneGameState(gameState));
+    unsubIntents = playroomSync.subscribeIntents(roomId, () => {});
   } else {
-    unsubSharedGame = mod.subscribeSharedGameState(roomId, (remote) => {
+    unsubSharedGame = playroomSync.subscribeSharedGameState(roomId, (remote) => {
       const me = transport.getLocalPlayerId?.();
       gameState = /** @type {typeof gameState} */ (JSON.parse(JSON.stringify(remote)));
       if (me) gameState.activePlayerId = me;
@@ -135,10 +139,17 @@ async function beginFirebaseGameSync(renderGame) {
 }
 
 (async () => {
-  if (useFirebaseRoom()) {
-    const { createFirebaseRoomTransport } = await import("./room-firebase.js");
-    transport = createFirebaseRoomTransport();
+  /** @type {'local'|'playroom'} */
+  let backend;
+  if (useLocalRoom()) {
+    backend = "local";
+    transport = createLocalRoomTransport();
+  } else if (typeof globalThis.Playroom !== "undefined") {
+    backend = "playroom";
+    transport = createPlayroomRoomTransport(globalThis.Playroom, PLAYROOM_CONFIG);
   } else {
+    console.error("Playroom Kit 未加载，请检查 index.html 中的 multiplayer.full.umd.js。已回退为本地房间模式。");
+    backend = "local";
     transport = createLocalRoomTransport();
   }
 
@@ -147,13 +158,15 @@ async function beginFirebaseGameSync(renderGame) {
     getGameState: () => gameState,
     dispatch,
     transport,
-    roomBackend: useFirebaseRoom() ? "firebase" : "local",
+    roomBackend: backend,
     setCurrentView: (v) => {
       currentView = v;
     },
     getCurrentView: () => currentView,
     onEnterGame,
-    beginFirebaseGameSync,
-    stopFirebaseGameSync,
+    beginOnlineGameSync,
+    stopOnlineGameSync,
   });
+
+  appRender.renderGame = () => appApi.renderGame();
 })();

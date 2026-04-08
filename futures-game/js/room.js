@@ -1,5 +1,5 @@
 /**
- * 房间会话与本地 Transport 模拟。后续可替换为 WebSocket/Firebase 等，保持方法签名一致。
+ * 房间会话与本地 Transport 模拟。在线模式由 Playroom Kit 实现，保持方法签名一致。
  * nextDayReady 在真联机时需由服务端同步；当前为单进程内存，仅本标签页有效。
  */
 
