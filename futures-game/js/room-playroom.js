@@ -24,6 +24,37 @@ export function createPlayroomRoomTransport(P, config) {
     listeners.forEach((fn) => fn());
   }
 
+  /**
+   * Playroom 会优先使用 URL 中的房间（如 hash `#r=`），覆盖 `insertCoin({ roomCode })`。
+   * 自定义「创建/加入房间」流程时清除这些片段，使房间号仅来自界面输入或新建随机房。
+   * @see https://docs.joinplayroom.com/api-reference/js/InitOptions — roomCode 与 URL 的优先级说明
+   */
+  function stripPlayroomRoomFromUrl() {
+    if (typeof window === "undefined") return;
+    try {
+      const url = new URL(window.location.href);
+      let changed = false;
+      if (url.hash && /^#r/i.test(url.hash)) {
+        url.hash = "";
+        changed = true;
+      }
+      const sp = url.searchParams;
+      for (const k of ["r", "room", "roomCode", "roomId"]) {
+        if (sp.has(k)) {
+          sp.delete(k);
+          changed = true;
+        }
+      }
+      if (changed) {
+        const q = sp.toString();
+        const next = `${url.pathname}${q ? `?${q}` : ""}${url.hash}`;
+        window.history.replaceState(window.history.state, "", next);
+      }
+    } catch (e) {
+      console.warn("stripPlayroomRoomFromUrl", e);
+    }
+  }
+
   function getParticipantsList() {
     const rec = P.getParticipants();
     if (!rec || typeof rec !== "object") return [];
@@ -106,6 +137,9 @@ export function createPlayroomRoomTransport(P, config) {
    * @param {{ skipLobby?: boolean, roomCode?: string, playerName?: string }} options
    */
   async function initConnection(options = {}) {
+    if (options.skipLobby) {
+      stripPlayroomRoomFromUrl();
+    }
     await P.insertCoin({
       gameId: config.gameId,
       baseUrl: config.baseUrl,

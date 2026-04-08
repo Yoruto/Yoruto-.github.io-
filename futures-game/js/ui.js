@@ -83,6 +83,20 @@ export function mountApp(root, ctx) {
     return normalizePlayerId(playerIdInput.value) ?? DEFAULT_PLAYER_ID;
   }
 
+  /**
+   * 进入游戏时的局内玩家 ID：优先使用房间 transport 的真实 ID（Playroom 为平台分配 id，
+   * 本地内存房间为创建/加入时确定的 id），与 `state.players` 的 key 一致；勿仅用输入框默认值。
+   */
+  function getGamePlayerIdForEnter() {
+    if (typeof transport.getLocalPlayerId === "function") {
+      const tid = transport.getLocalPlayerId();
+      if (tid != null && String(tid).trim() !== "") {
+        return String(tid);
+      }
+    }
+    return getResolvedPlayerId();
+  }
+
   // 统一显示创建/加入房间 UI（Playroom 和本地模式都支持）
   root.querySelectorAll(".local-only").forEach((el) => {
     el.classList.remove("hidden");
@@ -520,7 +534,7 @@ export function mountApp(root, ctx) {
         persistPlayerId();
         const sess = transport.getSession();
         const humanPlayerIds = sess ? sess.players.map((p) => p.id) : [];
-        onEnterGame(getResolvedPlayerId(), false, {
+        onEnterGame(getGamePlayerIdForEnter(), false, {
           humanPlayerIds,
           multiplayerWithBots: true,
         });
@@ -648,7 +662,7 @@ export function mountApp(root, ctx) {
     if (s?.gameStarted && getCurrentView() === "room" && !transport.isHost()) {
       const me = transport.getLocalPlayerId();
       const humanPlayerIds = s.players.map((p) => p.id);
-      onEnterGame(getResolvedPlayerId(), false, {
+      onEnterGame(getGamePlayerIdForEnter(), false, {
         humanPlayerIds,
         multiplayerWithBots: true,
       });
