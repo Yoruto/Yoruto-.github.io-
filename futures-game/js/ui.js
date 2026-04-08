@@ -83,12 +83,14 @@ export function mountApp(root, ctx) {
     return normalizePlayerId(playerIdInput.value) ?? DEFAULT_PLAYER_ID;
   }
 
+  // 统一显示创建/加入房间 UI（Playroom 和本地模式都支持）
   root.querySelectorAll(".local-only").forEach((el) => {
-    el.classList.toggle("hidden", isPlayroomOnline);
+    el.classList.remove("hidden");
   });
-  root.querySelectorAll(".playroom-only").forEach((el) => {
-    el.classList.toggle("hidden", !isPlayroomOnline);
-  });
+  // 隐藏原来的 Playroom 联机按钮（改用创建/加入房间流程）
+  if (btnPlayroomOnline) {
+    btnPlayroomOnline.classList.add("hidden");
+  }
 
   function showView(name) {
     setCurrentView(name);
@@ -316,7 +318,15 @@ export function mountApp(root, ctx) {
       if (roomStatusEl) roomStatusEl.textContent = "";
       return;
     }
-    if (roomIdEl) roomIdEl.textContent = s.roomId;
+    // 显示房间号，并添加复制按钮（Playroom 模式下）
+    if (roomIdEl) {
+      const host = transport.isHost();
+      if (isPlayroomOnline && host && s.roomId) {
+        roomIdEl.innerHTML = `${s.roomId} <button type="button" id="btnCopyRoomCode" style="font-size:0.75rem;padding:4px 8px;margin-left:8px;">复制</button>`;
+      } else {
+        roomIdEl.textContent = s.roomId;
+      }
+    }
     if (roomPlayersEl) {
       roomPlayersEl.innerHTML = s.players
         .map((p) => {
@@ -333,6 +343,27 @@ export function mountApp(root, ctx) {
       const base = s.gameStarted ? "游戏进行中" : "等待就绪";
       roomStatusEl.textContent = isPlayroomOnline ? `${base} · Playroom` : base;
     }
+    // 绑定复制按钮事件
+    const copyBtn = root.querySelector("#btnCopyRoomCode");
+    if (copyBtn && s.roomId) {
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(s.roomId);
+          copyBtn.textContent = "已复制!";
+          setTimeout(() => (copyBtn.textContent = "复制"), 1500);
+        } catch {
+          // 降级方案
+          const input = document.createElement("input");
+          input.value = s.roomId;
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand("copy");
+          document.body.removeChild(input);
+          copyBtn.textContent = "已复制!";
+          setTimeout(() => (copyBtn.textContent = "复制"), 1500);
+        }
+      });
+    }
   }
 
   function promptQty(title, defaultVal) {
@@ -347,8 +378,14 @@ export function mountApp(root, ctx) {
     btnCreateRoom.addEventListener("click", async () => {
       persistPlayerId();
       try {
-        await Promise.resolve(transport.createRoom(getResolvedPlayerId()));
+        const session = await Promise.resolve(transport.createRoom(getResolvedPlayerId()));
         showView("room");
+        // 如果是 Playroom 模式，显示房间号复制提示
+        if (isPlayroomOnline && session?.roomId) {
+          setTimeout(() => {
+            alert(`房间已创建！房间号: ${session.roomId}\n请复制房间号分享给好友。`);
+          }, 100);
+        }
       } catch (e) {
         console.error(e);
         alert(e instanceof Error ? e.message : "创建房间失败");
@@ -358,8 +395,13 @@ export function mountApp(root, ctx) {
   if (btnJoinRoom && joinRoomInput) {
     btnJoinRoom.addEventListener("click", async () => {
       persistPlayerId();
+      const roomCode = joinRoomInput.value.trim();
+      if (!roomCode) {
+        alert("请输入房间号");
+        return;
+      }
       try {
-        const r = await Promise.resolve(transport.joinRoom(joinRoomInput.value, getResolvedPlayerId()));
+        const r = await Promise.resolve(transport.joinRoom(roomCode, getResolvedPlayerId()));
         if (!r.ok) {
           alert(r.error || "加入失败");
           return;
@@ -476,15 +518,16 @@ export function mountApp(root, ctx) {
           return;
         }
         persistPlayerId();
-        if (isPlayroomOnline) {
-          return;
-        }
         const sess = transport.getSession();
         const humanPlayerIds = sess ? sess.players.map((p) => p.id) : [];
         onEnterGame(getResolvedPlayerId(), false, {
           humanPlayerIds,
           multiplayerWithBots: true,
         });
+        // Playroom 模式下需要启动联机同步
+        if (isPlayroomOnline && beginOnlineGameSync) {
+          await beginOnlineGameSync(renderGame);
+        }
         showView("game");
       } catch (e) {
         console.error(e);

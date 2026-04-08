@@ -1,5 +1,5 @@
 /**
- * Playroom Kit 实现的 RoomTransport；需先 await startLobby()（insertCoin）再使用。
+ * Playroom Kit 实现的 RoomTransport；支持房间号创建/加入流程。
  */
 
 import { MAX_ROOM_PLAYERS } from "./room.js";
@@ -19,6 +19,8 @@ export function createPlayroomRoomTransport(P, config) {
   let onJoinUnsub = null;
   /** @type {Set<() => void>} */
   const listeners = new Set();
+  /** @type {boolean} */
+  let skipLobbyMode = false;
 
   function notify() {
     listeners.forEach((fn) => fn());
@@ -84,44 +86,108 @@ export function createPlayroomRoomTransport(P, config) {
     }
   }
 
+  /**
+   * 初始化 Playroom 连接（内部共用）
+   * @param {{ skipLobby?: boolean, roomCode?: string }} options
+   */
+  async function initConnection(options = {}) {
+    await P.insertCoin({
+      gameId: config.gameId,
+      baseUrl: config.baseUrl,
+      maxPlayersPerRoom: MAX_ROOM_PLAYERS,
+      skipLobby: options.skipLobby || false,
+      roomCode: options.roomCode,
+    });
+    if (P.isHost()) {
+      P.setState("hostPlayerId", P.myPlayer().id, true);
+      P.setState("nextDayReady", {}, true);
+    }
+    await P.waitForState("hostPlayerId");
+    connected = true;
+    skipLobbyMode = !!options.skipLobby;
+    rebuildSession();
+    onJoinUnsub = P.onPlayerJoin(() => {
+      rebuildSession();
+      notify();
+    });
+    startPolling();
+    notify();
+  }
+
   return {
     async startLobby() {
-      await P.insertCoin({
-        gameId: config.gameId,
-        baseUrl: config.baseUrl,
-        maxPlayersPerRoom: MAX_ROOM_PLAYERS,
-      });
-      if (P.isHost()) {
-        P.setState("hostPlayerId", P.myPlayer().id, true);
-        P.setState("nextDayReady", {}, true);
+      await initConnection({ skipLobby: false });
+    },
+
+    async createRoom(_preferredPlayerId) {
+      void _preferredPlayerId;
+      try {
+        await initConnection({ skipLobby: true });
+        // Playroom 自动生成房间码，从 getRoomCode() 获取
+        const roomCode = P.getRoomCode();
+        return {
+          roomId: roomCode || "",
+          hostPlayerId: P.myPlayer().id,
+          players: [{ id: P.myPlayer().id, displayName: P.myPlayer().id, ready: false }],
+          gameStarted: false,
+          nextDayReady: {},
+        };
+      } catch (e) {
+        console.error(e);
+        throw new Error("创建房间失败: " + (e instanceof Error ? e.message : String(e)));
       }
-      await P.waitForState("hostPlayerId");
-      connected = true;
-      rebuildSession();
-      onJoinUnsub = P.onPlayerJoin(() => {
-        rebuildSession();
-        notify();
-      });
-      startPolling();
+    },
+
+    async joinRoom(roomId, _preferredPlayerId) {
+      void _preferredPlayerId;
+      if (!roomId || typeof roomId !== "string") {
+        return { ok: false, error: "请输入房间号" };
+      }
+      try {
+        await initConnection({ skipLobby: true, roomCode: roomId.trim() });
+        return { ok: true, session: rebuildSession() };
+      } catch (e) {
+        console.error(e);
+        const msg = e instanceof Error ? e.message : String(e);
+        // 友好错误提示
+        if (msg.includes("not found") || msg.includes(" Room ") || msg.includes("exist")) {
+          return { ok: false, error: "房间不存在或已关闭" };
+        }
+        if (msg.includes("full") || msg.includes("maximum")) {
+          return { ok: false, error: "房间已满" };
+        }
+        return { ok: false, error: "加入房间失败: " + msg };
+      }
+    },
+
+    setReady(ready) {
+      // 在房间号模式下，将就绪状态存储在本地缓存中
+      if (!connected || !cachedSession) return;
+      const me = P.myPlayer().id;
+      const p = cachedSession.players.find((x) => x.id === me);
+      if (p) p.ready = !!ready;
+      // 通知其他玩家（通过 Playroom 状态同步）
+      P.setState(`playerReady_${me}`, !!ready, true);
       notify();
     },
 
-    createRoom(_preferredPlayerId) {
-      void _preferredPlayerId;
-      throw new Error("请使用 Playroom 联机按钮");
-    },
-
-    joinRoom(_roomId, _preferredPlayerId) {
-      void _roomId;
-      void _preferredPlayerId;
-      return { ok: false, error: "请使用 Playroom 联机按钮" };
-    },
-
-    setReady(_ready) {
-      void _ready;
-    },
-
     hostStartGame() {
+      if (!connected || !cachedSession) {
+        return { ok: false, error: "未在房间中" };
+      }
+      const me = P.myPlayer().id;
+      if (cachedSession.hostPlayerId !== me) {
+        return { ok: false, error: "仅房主可开始" };
+      }
+      // 检查全员就绪
+      const allReady = cachedSession.players.length > 0 && cachedSession.players.every((p) => p.ready);
+      if (!allReady) {
+        return { ok: false, error: "请等待全员就绪" };
+      }
+      // 标记游戏已开始
+      cachedSession.gameStarted = true;
+      P.setState("gameStarted", true, true);
+      notify();
       return { ok: true };
     },
 
