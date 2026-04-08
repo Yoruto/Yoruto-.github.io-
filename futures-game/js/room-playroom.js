@@ -130,8 +130,8 @@ export function createPlayroomRoomTransport(P, config) {
       rebuildSession();
       notify();
     });
-    // 监听游戏开始状态（非房主用）
-    P.onStateChange("gameStarted", (started) => {
+    // 监听游戏开始状态（非房主用）- Playroom 使用 onStateSet
+    P.onStateSet("gameStarted", (started) => {
       if (started && cachedSession) {
         cachedSession.gameStarted = true;
         notify();
