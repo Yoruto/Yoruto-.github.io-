@@ -87,8 +87,23 @@ export function createPlayroomRoomTransport(P, config) {
   }
 
   /**
+   * 设置 Playroom 玩家显示名
+   * @param {string} name
+   */
+  function setPlayroomProfileName(name) {
+    try {
+      const player = P.myPlayer();
+      if (player && player.setProfile) {
+        player.setProfile({ name: String(name) });
+      }
+    } catch (e) {
+      console.warn("设置 Playroom profile 失败:", e);
+    }
+  }
+
+  /**
    * 初始化 Playroom 连接（内部共用）
-   * @param {{ skipLobby?: boolean, roomCode?: string }} options
+   * @param {{ skipLobby?: boolean, roomCode?: string, playerName?: string }} options
    */
   async function initConnection(options = {}) {
     await P.insertCoin({
@@ -98,9 +113,14 @@ export function createPlayroomRoomTransport(P, config) {
       skipLobby: options.skipLobby || false,
       roomCode: options.roomCode,
     });
+    // 设置玩家显示名
+    if (options.playerName) {
+      setPlayroomProfileName(options.playerName);
+    }
     if (P.isHost()) {
       P.setState("hostPlayerId", P.myPlayer().id, true);
       P.setState("nextDayReady", {}, true);
+      P.setState("gameStarted", false, true);
     }
     await P.waitForState("hostPlayerId");
     connected = true;
@@ -109,6 +129,13 @@ export function createPlayroomRoomTransport(P, config) {
     onJoinUnsub = P.onPlayerJoin(() => {
       rebuildSession();
       notify();
+    });
+    // 监听游戏开始状态（非房主用）
+    P.onStateChange("gameStarted", (started) => {
+      if (started && cachedSession) {
+        cachedSession.gameStarted = true;
+        notify();
+      }
     });
     startPolling();
     notify();
@@ -119,16 +146,15 @@ export function createPlayroomRoomTransport(P, config) {
       await initConnection({ skipLobby: false });
     },
 
-    async createRoom(_preferredPlayerId) {
-      void _preferredPlayerId;
+    async createRoom(preferredPlayerId) {
       try {
-        await initConnection({ skipLobby: true });
+        await initConnection({ skipLobby: true, playerName: preferredPlayerId });
         // Playroom 自动生成房间码，从 getRoomCode() 获取
         const roomCode = P.getRoomCode();
         return {
           roomId: roomCode || "",
           hostPlayerId: P.myPlayer().id,
-          players: [{ id: P.myPlayer().id, displayName: P.myPlayer().id, ready: false }],
+          players: [{ id: P.myPlayer().id, displayName: preferredPlayerId || P.myPlayer().id, ready: false }],
           gameStarted: false,
           nextDayReady: {},
         };
@@ -138,13 +164,12 @@ export function createPlayroomRoomTransport(P, config) {
       }
     },
 
-    async joinRoom(roomId, _preferredPlayerId) {
-      void _preferredPlayerId;
+    async joinRoom(roomId, preferredPlayerId) {
       if (!roomId || typeof roomId !== "string") {
         return { ok: false, error: "请输入房间号" };
       }
       try {
-        await initConnection({ skipLobby: true, roomCode: roomId.trim() });
+        await initConnection({ skipLobby: true, roomCode: roomId.trim(), playerName: preferredPlayerId });
         return { ok: true, session: rebuildSession() };
       } catch (e) {
         console.error(e);

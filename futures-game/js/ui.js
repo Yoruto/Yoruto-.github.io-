@@ -634,6 +634,22 @@ export function mountApp(root, ctx) {
   }
 
   transport.onStateChange(() => {
+    const s = transport.getSession();
+    // 检测到游戏已开始且当前在房间界面，自动切换到游戏（非房主）
+    if (s?.gameStarted && getCurrentView() === "room" && !transport.isHost()) {
+      const me = transport.getLocalPlayerId();
+      const humanPlayerIds = s.players.map((p) => p.id);
+      onEnterGame(getResolvedPlayerId(), false, {
+        humanPlayerIds,
+        multiplayerWithBots: true,
+      });
+      // 启动联机同步
+      if (isPlayroomOnline && beginOnlineGameSync) {
+        void beginOnlineGameSync(renderGame);
+      }
+      showView("game");
+      return;
+    }
     if (getCurrentView() === "room") {
       renderRoom();
     }
