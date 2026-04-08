@@ -783,6 +783,7 @@ function useSeed(state, seedId, qty, config) {
  * @param {typeof GAME_CONFIG} config
  */
 function resetGame(state, config) {
+  const labelsBackup = state.playerLabels && typeof state.playerLabels === "object" ? { ...state.playerLabels } : {};
   state.prices = { ...config.initial.prices };
   state.dailyStats = buildEmptyDailyStats(config.commodities);
   state.currentDay = config.initial.day;
@@ -818,6 +819,11 @@ function resetGame(state, config) {
     state.players = {
       [pid]: createPlayerState(config),
     };
+  }
+  /** @type {Record<string, string>} */
+  state.playerLabels = {};
+  for (const pkey of Object.keys(state.players)) {
+    state.playerLabels[pkey] = labelsBackup[pkey] ?? pkey;
   }
   pushLog(state, "🔄 游戏已重置。初始资金10万，新一轮周期开始！", config);
 }

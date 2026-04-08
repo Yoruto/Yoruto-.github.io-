@@ -147,6 +147,7 @@ export function buildEmptyDailyStats(commodities) {
  *   soloWithAI?: boolean,
  *   multiplayerWithBots?: boolean,
  *   humanPlayerIds?: string[],
+ *   playerLabels?: Record<string, string>,
  * }} [options]
  */
 export function createInitialGameState(config = GAME_CONFIG, options = {}) {
@@ -183,6 +184,14 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     botPlayerIds = [];
   }
 
+  /** @type {Record<string, string>} */
+  const playerLabels = {};
+  const fromOpt = options.playerLabels && typeof options.playerLabels === "object" ? options.playerLabels : {};
+  for (const pid of Object.keys(players)) {
+    const lab = fromOpt[pid];
+    playerLabels[pid] = lab != null && String(lab).trim() !== "" ? String(lab).trim() : pid;
+  }
+
   return {
     prices: { ...config.initial.prices },
     dailyStats: buildEmptyDailyStats(config.commodities),
@@ -201,6 +210,8 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     humanPlayerIds,
     /** @type {string[]} */
     botPlayerIds,
+    /** 结算/界面展示用：局内 playerId → 玩家输入或会话中的显示名 */
+    playerLabels,
     spotPool: buildInitialSpotPool(config),
     players,
   };
@@ -235,6 +246,7 @@ export function cloneGameState(state) {
     multiplayerWithBots: !!state.multiplayerWithBots,
     humanPlayerIds: state.humanPlayerIds ? [...state.humanPlayerIds] : [],
     botPlayerIds: state.botPlayerIds ? [...state.botPlayerIds] : [],
+    playerLabels: state.playerLabels ? { ...state.playerLabels } : {},
     spotPool: { ...state.spotPool },
     players: JSON.parse(JSON.stringify(state.players)),
   };

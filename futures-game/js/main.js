@@ -95,15 +95,16 @@ function hostPushSharedStateIfNeeded() {
 /**
  * @param {string | undefined} playerId
  * @param {boolean} [soloWithAI]
- * @param {{ humanPlayerIds?: string[], multiplayerWithBots?: boolean }} [mp]
+ * @param {{ humanPlayerIds?: string[], multiplayerWithBots?: boolean, playerLabels?: Record<string, string> }} [mp]
  */
 function onEnterGame(playerId, soloWithAI = false, mp = {}) {
-  const { humanPlayerIds, multiplayerWithBots } = mp;
+  const { humanPlayerIds, multiplayerWithBots, playerLabels } = mp;
   gameState = createInitialGameState(GAME_CONFIG, {
     playerId,
     soloWithAI,
     humanPlayerIds,
     multiplayerWithBots,
+    playerLabels,
   });
   reduce(gameState, {
     type: "APPEND_LOG",

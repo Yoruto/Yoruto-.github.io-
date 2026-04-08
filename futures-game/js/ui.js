@@ -13,7 +13,7 @@ const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
  * @param {'local'|'playroom'} [ctx.roomBackend]
  * @param {(view: 'start'|'room'|'game') => void} ctx.setCurrentView
  * @param {() => 'start'|'room'|'game'} ctx.getCurrentView
- * @param {(playerId?: string, soloWithAI?: boolean, mp?: { humanPlayerIds?: string[], multiplayerWithBots?: boolean }) => void} ctx.onEnterGame
+ * @param {(playerId?: string, soloWithAI?: boolean, mp?: { humanPlayerIds?: string[], multiplayerWithBots?: boolean, playerLabels?: Record<string, string> }) => void} ctx.onEnterGame
  * @param {(renderGame: () => void | Promise<void>) => Promise<void>} [ctx.beginOnlineGameSync]
  * @param {() => void} [ctx.stopOnlineGameSync]
  */
@@ -95,6 +95,43 @@ export function mountApp(root, ctx) {
       }
     }
     return getResolvedPlayerId();
+  }
+
+  /** 用于房间展示名 / 结算：优先输入框原文，否则规范化后的 id */
+  function getDisplayNameForRoomForm() {
+    if (playerIdInput && playerIdInput.value.trim()) return playerIdInput.value.trim();
+    return getResolvedPlayerId();
+  }
+
+  /** 从当前房间会话构建玩家显示名（创建/加入时写入的 displayName）。 */
+  function buildPlayerLabelsFromSession() {
+    const sess = transport.getSession();
+    if (!sess || !sess.players) return {};
+    /** @type {Record<string, string>} */
+    const out = {};
+    for (const p of sess.players) {
+      const dn =
+        p.displayName != null && String(p.displayName).trim() !== "" ? String(p.displayName).trim() : p.id;
+      out[p.id] = dn;
+    }
+    return out;
+  }
+
+  /** Playroom 大厅入口：用 participants 的 profile 名作为显示名。 */
+  function buildPlayerLabelsFromPlayroomParticipants(P) {
+    /** @type {Record<string, string>} */
+    const out = {};
+    for (const p of Object.values(P.getParticipants())) {
+      let name = p.id;
+      try {
+        const prof = p.getProfile();
+        if (prof && prof.name) name = String(prof.name);
+      } catch {
+        /* ignore */
+      }
+      out[p.id] = name;
+    }
+    return out;
   }
 
   // 统一显示创建/加入房间 UI（Playroom 和本地模式都支持）
@@ -303,11 +340,12 @@ export function mountApp(root, ctx) {
     if (gameEndOverlay && gameEndRankList && gameEndSub) {
       if (gameOver && state.finalRanking && state.finalRanking.length && !endModalDismissed) {
         gameEndSub.textContent = `第 ${totalGameDays} 天交割结算已完成，背包作物已按市价强制卖出（种子保留）。最终排名按现金：`;
+        const labels = state.playerLabels && typeof state.playerLabels === "object" ? state.playerLabels : {};
         gameEndRankList.innerHTML = state.finalRanking
-          .map(
-            (r, i) =>
-              `<li><strong>${i + 1}.</strong> 玩家 <span class="rank-id">${escapeHtml(r.playerId)}</span> — 现金 <span class="rank-cash">¥${r.cash.toFixed(2)}</span></li>`
-          )
+          .map((r) => {
+            const showName = labels[r.playerId] ?? r.playerId;
+            return `<li>玩家 <span class="rank-id">${escapeHtml(showName)}</span> — 现金 <span class="rank-cash">¥${r.cash.toFixed(2)}</span></li>`;
+          })
           .join("");
         gameEndOverlay.classList.remove("hidden");
         gameEndOverlay.setAttribute("aria-hidden", "false");
@@ -392,7 +430,7 @@ export function mountApp(root, ctx) {
     btnCreateRoom.addEventListener("click", async () => {
       persistPlayerId();
       try {
-        const session = await Promise.resolve(transport.createRoom(getResolvedPlayerId()));
+        const session = await Promise.resolve(transport.createRoom(getDisplayNameForRoomForm()));
         showView("room");
         // 如果是 Playroom 模式，显示房间号复制提示
         if (isPlayroomOnline && session?.roomId) {
@@ -415,7 +453,7 @@ export function mountApp(root, ctx) {
         return;
       }
       try {
-        const r = await Promise.resolve(transport.joinRoom(roomCode, getResolvedPlayerId()));
+        const r = await Promise.resolve(transport.joinRoom(roomCode, getDisplayNameForRoomForm()));
         if (!r.ok) {
           alert(r.error || "加入失败");
           return;
@@ -430,7 +468,10 @@ export function mountApp(root, ctx) {
   if (btnSolo) {
     btnSolo.addEventListener("click", () => {
       persistPlayerId();
-      onEnterGame(getResolvedPlayerId(), true);
+        const soloPid = getResolvedPlayerId();
+        onEnterGame(soloPid, true, {
+          playerLabels: { [soloPid]: getDisplayNameForRoomForm() },
+        });
       showView("game");
     });
   }
@@ -511,6 +552,7 @@ export function mountApp(root, ctx) {
         onEnterGame(P.myPlayer().id, false, {
           humanPlayerIds,
           multiplayerWithBots: true,
+          playerLabels: buildPlayerLabelsFromPlayroomParticipants(P),
         });
         showView("game");
         if (beginOnlineGameSync) {
@@ -537,6 +579,7 @@ export function mountApp(root, ctx) {
         onEnterGame(getGamePlayerIdForEnter(), false, {
           humanPlayerIds,
           multiplayerWithBots: true,
+          playerLabels: buildPlayerLabelsFromSession(),
         });
         // Playroom 模式下需要启动联机同步
         if (isPlayroomOnline && beginOnlineGameSync) {
@@ -665,6 +708,7 @@ export function mountApp(root, ctx) {
       onEnterGame(getGamePlayerIdForEnter(), false, {
         humanPlayerIds,
         multiplayerWithBots: true,
+        playerLabels: buildPlayerLabelsFromSession(),
       });
       // 启动联机同步
       if (isPlayroomOnline && beginOnlineGameSync) {
