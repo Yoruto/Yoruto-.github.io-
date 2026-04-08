@@ -1,5 +1,6 @@
 import { computeEquity } from "./logic.js";
 import { DEFAULT_PLAYER_ID, getActivePlayer, normalizePlayerId } from "./state.js";
+import { useFirebaseRoom } from "./room-mode.js";
 
 const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
 
@@ -10,12 +11,30 @@ const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
  * @param {() => object} ctx.getGameState
  * @param {(a: import('./logic.js').GameAction) => void} ctx.dispatch
  * @param {ReturnType<import('./room.js').createLocalRoomTransport>} ctx.transport
+ * @param {'local'|'firebase'} [ctx.roomBackend]
  * @param {(view: 'start'|'room'|'game') => void} ctx.setCurrentView
  * @param {() => 'start'|'room'|'game'} ctx.getCurrentView
- * @param {(playerId?: string, soloWithAI?: boolean) => void} ctx.onEnterGame
+ * @param {(playerId?: string, soloWithAI?: boolean, mp?: { humanPlayerIds?: string[], multiplayerWithBots?: boolean }) => void} ctx.onEnterGame
+ * @param {(renderGame: () => void | Promise<void>) => Promise<void>} [ctx.beginFirebaseGameSync]
+ * @param {() => void} [ctx.stopFirebaseGameSync]
  */
 export function mountApp(root, ctx) {
-  const { config, getGameState, dispatch, transport, setCurrentView, getCurrentView, onEnterGame } = ctx;
+  const {
+    config,
+    getGameState,
+    dispatch,
+    transport,
+    roomBackend,
+    setCurrentView,
+    getCurrentView,
+    onEnterGame,
+    beginFirebaseGameSync,
+    stopFirebaseGameSync,
+  } = ctx;
+  const isFirebaseRoom = roomBackend === "firebase" || useFirebaseRoom();
+
+  /** Firestore 多人：同一房间对局只自动进入一次 */
+  let firebaseGameEnteredKey = "";
 
   const playerIdInput = /** @type {HTMLInputElement | null} */ (root.querySelector("#playerIdInput"));
 
@@ -79,8 +98,19 @@ export function mountApp(root, ctx) {
     if (name === "room") renderRoom();
   }
 
-  function renderGame() {
-    const state = getGameState();
+  async function renderGame() {
+    let state = getGameState();
+    if (state.multiplayerWithBots && !state.gameEnded) {
+      const prog = transport.getNextDayProgress(state);
+      if (prog.total > 0 && prog.ready === prog.total) {
+        const guestSkipNextDay = isFirebaseRoom && typeof transport.isHost === "function" && !transport.isHost();
+        if (!guestSkipNextDay) {
+          dispatch({ type: "NEXT_DAY" });
+          await Promise.resolve(transport.clearNextDayReady(true));
+          state = getGameState();
+        }
+      }
+    }
     const player = getActivePlayer(state);
     const equity = computeEquity(state, config);
     const gameOver = !!state.gameEnded;
@@ -176,7 +206,7 @@ export function mountApp(root, ctx) {
                     <button type="button" data-action="close-short" data-commodity-id="${id}">❌ 平空</button>
                 </td>
             `;
-        if (gameOver) {
+        if (gameOver || player.status === "failed") {
           tr.querySelectorAll("button").forEach((b) => {
             b.disabled = true;
           });
@@ -217,7 +247,7 @@ export function mountApp(root, ctx) {
             div.className = "order-item";
             div.innerHTML = `
                     <span><strong>${name}</strong> ${dirText}  ${order.quantity}手 @${order.price.toFixed(2)}</span>
-                    <button type="button" class="cancelOrderBtn" data-action="cancel-order" data-order-id="${order.id}" style="background:#8b3c2c;" ${gameOver ? "disabled" : ""}>✖️撤单</button>
+                    <button type="button" class="cancelOrderBtn" data-action="cancel-order" data-order-id="${order.id}" style="background:#8b3c2c;" ${gameOver || player.status === "failed" ? "disabled" : ""}>✖️撤单</button>
                 `;
             orderContainer.appendChild(div);
           });
@@ -234,11 +264,20 @@ export function mountApp(root, ctx) {
 
     const nextDayBtnEl = viewGame.querySelector("#nextDayBtn");
     if (nextDayBtnEl) {
-      nextDayBtnEl.disabled = gameOver;
+      if (state.multiplayerWithBots && transport.getSession()) {
+        const prog = transport.getNextDayProgress(state);
+        nextDayBtnEl.textContent = `⏩ 下一天 (${prog.ready}/${prog.total})`;
+        const me = transport.getLocalPlayerId();
+        const pl = me ? state.players[me] : null;
+        nextDayBtnEl.disabled = gameOver || pl?.status === "failed";
+      } else {
+        nextDayBtnEl.textContent = "⏩ 下一天 ➕";
+        nextDayBtnEl.disabled = gameOver;
+      }
     }
     const placeOrderBtnEl = viewGame.querySelector("#placeOrderBtn");
     if (placeOrderBtnEl) {
-      placeOrderBtnEl.disabled = gameOver;
+      placeOrderBtnEl.disabled = gameOver || player.status === "failed";
     }
 
     if (gameEndOverlay && gameEndRankList && gameEndSub) {
@@ -267,6 +306,24 @@ export function mountApp(root, ctx) {
       .replace(/"/g, "&quot;");
   }
 
+  function tryEnterFirebaseMultiplayerGame() {
+    if (!isFirebaseRoom) return;
+    const s = transport.getSession();
+    if (!s?.gameStarted || getCurrentView() !== "room") return;
+    const key = `${s.roomId}:started`;
+    if (firebaseGameEnteredKey === key) return;
+    firebaseGameEnteredKey = key;
+    const humanPlayerIds = s.players.map((p) => p.id);
+    onEnterGame(getResolvedPlayerId(), false, {
+      humanPlayerIds,
+      multiplayerWithBots: true,
+    });
+    showView("game");
+    if (beginFirebaseGameSync) {
+      void beginFirebaseGameSync(renderGame);
+    }
+  }
+
   function renderRoom() {
     const s = transport.getSession();
     if (!s) {
@@ -287,7 +344,8 @@ export function mountApp(root, ctx) {
       btnHostStart.style.display = host ? "inline-block" : "none";
     }
     if (roomStatusEl) {
-      roomStatusEl.textContent = s.gameStarted ? "游戏进行中" : "等待就绪";
+      const base = s.gameStarted ? "游戏进行中" : "等待就绪";
+      roomStatusEl.textContent = isFirebaseRoom ? `${base} · Firestore 联机` : base;
     }
   }
 
@@ -300,21 +358,31 @@ export function mountApp(root, ctx) {
   }
 
   if (btnCreateRoom) {
-    btnCreateRoom.addEventListener("click", () => {
+    btnCreateRoom.addEventListener("click", async () => {
       persistPlayerId();
-      transport.createRoom(getResolvedPlayerId());
-      showView("room");
+      try {
+        await Promise.resolve(transport.createRoom(getResolvedPlayerId()));
+        showView("room");
+      } catch (e) {
+        console.error(e);
+        alert(e instanceof Error ? e.message : "创建房间失败");
+      }
     });
   }
   if (btnJoinRoom && joinRoomInput) {
-    btnJoinRoom.addEventListener("click", () => {
+    btnJoinRoom.addEventListener("click", async () => {
       persistPlayerId();
-      const r = transport.joinRoom(joinRoomInput.value, getResolvedPlayerId());
-      if (!r.ok) {
-        alert(r.error || "加入失败");
-        return;
+      try {
+        const r = await Promise.resolve(transport.joinRoom(joinRoomInput.value, getResolvedPlayerId()));
+        if (!r.ok) {
+          alert(r.error || "加入失败");
+          return;
+        }
+        showView("room");
+      } catch (e) {
+        console.error(e);
+        alert(e instanceof Error ? e.message : "加入失败");
       }
-      showView("room");
     });
   }
   if (btnSolo) {
@@ -325,18 +393,28 @@ export function mountApp(root, ctx) {
     });
   }
   if (btnRoomReady) {
-    btnRoomReady.addEventListener("click", () => {
+    btnRoomReady.addEventListener("click", async () => {
       const s = transport.getSession();
       const me = transport.getLocalPlayerId();
       if (!s || !me) return;
       const p = s.players.find((x) => x.id === me);
-      transport.setReady(!(p && p.ready));
-      renderRoom();
+      try {
+        await Promise.resolve(transport.setReady(!(p && p.ready)));
+        renderRoom();
+      } catch (e) {
+        console.error(e);
+      }
     });
   }
   if (btnRoomLeave) {
-    btnRoomLeave.addEventListener("click", () => {
-      transport.leaveRoom();
+    btnRoomLeave.addEventListener("click", async () => {
+      try {
+        firebaseGameEnteredKey = "";
+        stopFirebaseGameSync?.();
+        await Promise.resolve(transport.leaveRoom());
+      } catch (e) {
+        console.error(e);
+      }
       showView("start");
     });
   }
@@ -381,15 +459,29 @@ export function mountApp(root, ctx) {
   });
 
   if (btnHostStart) {
-    btnHostStart.addEventListener("click", () => {
-      const r = transport.hostStartGame();
-      if (!r.ok) {
-        alert(r.error || "无法开始");
-        return;
+    btnHostStart.addEventListener("click", async () => {
+      try {
+        const r = await Promise.resolve(transport.hostStartGame());
+        if (!r.ok) {
+          alert(r.error || "无法开始");
+          return;
+        }
+        persistPlayerId();
+        if (isFirebaseRoom) {
+          // 全员由 onStateChange + tryEnterFirebaseMultiplayerGame 进入游戏
+          return;
+        }
+        const sess = transport.getSession();
+        const humanPlayerIds = sess ? sess.players.map((p) => p.id) : [];
+        onEnterGame(getResolvedPlayerId(), false, {
+          humanPlayerIds,
+          multiplayerWithBots: true,
+        });
+        showView("game");
+      } catch (e) {
+        console.error(e);
+        alert("无法开始游戏");
       }
-      persistPlayerId();
-      onEnterGame(getResolvedPlayerId(), false);
-      showView("game");
     });
   }
 
@@ -447,9 +539,25 @@ export function mountApp(root, ctx) {
   }
 
   if (nextDayBtn) {
-    nextDayBtn.addEventListener("click", () => {
+    nextDayBtn.addEventListener("click", async () => {
+      const gs = getGameState();
+      if (gs.multiplayerWithBots) {
+        const me = transport.getLocalPlayerId();
+        const s = transport.getSession();
+        if (!me || !s) return;
+        const pl = gs.players[me];
+        if (pl?.status === "failed") return;
+        const cur = !!s.nextDayReady?.[me];
+        try {
+          await Promise.resolve(transport.setNextDayReady(!cur));
+          void renderGame();
+        } catch (e) {
+          console.error(e);
+        }
+        return;
+      }
       dispatch({ type: "NEXT_DAY" });
-      renderGame();
+      void renderGame();
     });
   }
   if (resetGameBtn) {
@@ -475,7 +583,11 @@ export function mountApp(root, ctx) {
   }
 
   transport.onStateChange(() => {
-    if (getCurrentView() === "room") renderRoom();
+    if (getCurrentView() === "room") {
+      renderRoom();
+      tryEnterFirebaseMultiplayerGame();
+    }
+    if (getCurrentView() === "game") renderGame();
   });
 
   showView("start");

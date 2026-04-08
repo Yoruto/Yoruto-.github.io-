@@ -1,8 +1,12 @@
 /**
  * 房间会话与本地 Transport 模拟。后续可替换为 WebSocket/Firebase 等，保持方法签名一致。
+ * nextDayReady 在真联机时需由服务端同步；当前为单进程内存，仅本标签页有效。
  */
 
 import { normalizePlayerId } from "./state.js";
+
+/** 房间内真人玩家上限 */
+export const MAX_ROOM_PLAYERS = 4;
 
 /**
  * @typedef {{ id: string, displayName: string, ready: boolean }} RoomPlayer
@@ -14,6 +18,7 @@ import { normalizePlayerId } from "./state.js";
  *   hostPlayerId: string,
  *   players: RoomPlayer[],
  *   gameStarted: boolean,
+ *   nextDayReady: Record<string, boolean>,
  * }} RoomSession
  */
 
@@ -22,7 +27,7 @@ const registry = new Map();
 
 let nextClientId = 1;
 
-function genRoomId() {
+export function genRoomId() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
@@ -36,6 +41,11 @@ function genRoomId() {
  *   getSession: () => RoomSession | null,
  *   isHost: () => boolean,
  *   getLocalPlayerId: () => string | null,
+ *   getRoomId: () => string | null,
+ *   getHostUid?: () => string | null,
+ *   setNextDayReady: (ready: boolean) => void,
+ *   clearNextDayReady: (silent?: boolean) => void,
+ *   getNextDayProgress: (gameState: { players: Record<string, { status?: string }> }) => { ready: number, total: number },
  *   onStateChange: (cb: () => void) => () => void,
  * }} RoomTransport
  */
@@ -56,6 +66,15 @@ export function createLocalRoomTransport() {
     listeners.forEach((fn) => fn());
   }
 
+  /**
+   * @param {RoomSession | null} s
+   */
+  function ensureNextDayReady(s) {
+    if (s && !s.nextDayReady) {
+      s.nextDayReady = {};
+    }
+  }
+
   return {
     createRoom(preferredPlayerId) {
       const roomId = genRoomId();
@@ -65,6 +84,7 @@ export function createLocalRoomTransport() {
         hostPlayerId: hostId,
         players: [{ id: hostId, displayName: hostId, ready: false }],
         gameStarted: false,
+        nextDayReady: {},
       };
       localPlayerId = hostId;
       registry.set(roomId, session);
@@ -77,8 +97,12 @@ export function createLocalRoomTransport() {
       if (!s) {
         return { ok: false, error: "房间不存在" };
       }
+      ensureNextDayReady(s);
       if (s.gameStarted) {
         return { ok: false, error: "游戏已开始" };
+      }
+      if (s.players.length >= MAX_ROOM_PLAYERS) {
+        return { ok: false, error: "房间已满" };
       }
       const norm = normalizePlayerId(preferredPlayerId);
       let guestId;
@@ -119,6 +143,7 @@ export function createLocalRoomTransport() {
         return { ok: false, error: "请等待全员就绪" };
       }
       session.gameStarted = true;
+      ensureNextDayReady(session);
       notify();
       return { ok: true };
     },
@@ -153,6 +178,48 @@ export function createLocalRoomTransport() {
 
     getLocalPlayerId() {
       return localPlayerId;
+    },
+
+    getRoomId() {
+      return session?.roomId ?? null;
+    },
+
+    getHostUid() {
+      return null;
+    },
+
+    setNextDayReady(ready) {
+      if (!session || !localPlayerId) return;
+      ensureNextDayReady(session);
+      session.nextDayReady[localPlayerId] = !!ready;
+      notify();
+    },
+
+    clearNextDayReady(silent) {
+      if (!session) return Promise.resolve();
+      ensureNextDayReady(session);
+      for (const p of session.players) {
+        session.nextDayReady[p.id] = false;
+      }
+      if (!silent) notify();
+      return Promise.resolve();
+    },
+
+    getNextDayProgress(gameState) {
+      if (!session) {
+        return { ready: 0, total: 0 };
+      }
+      ensureNextDayReady(session);
+      const ids = session.players.map((p) => p.id);
+      const total = ids.length;
+      let ready = 0;
+      for (const id of ids) {
+        const pl = gameState.players[id];
+        if (pl?.status === "failed" || session.nextDayReady[id]) {
+          ready += 1;
+        }
+      }
+      return { ready, total };
     },
 
     onStateChange(cb) {

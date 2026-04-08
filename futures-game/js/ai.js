@@ -82,15 +82,14 @@ function maxFeasibleOpenQty(state, playerId, comm, direction, config) {
  * @param {ReturnType<import('./state.js').createInitialGameState>} state
  * @param {import('./config.js').GAME_CONFIG} config
  * @param {{ openMarketPositionForPlayer: Function, closePositionForPlayer: Function }} api
+ * @param {string[]} botPlayerIds
  */
-export function runSoloAITurns(state, config, api) {
-  if (!state.soloWithAI) return;
+export function runBotTurns(state, config, api, botPlayerIds) {
+  if (!botPlayerIds.length) return;
   const { openMarketPositionForPlayer, closePositionForPlayer } = api;
   const rng = () => Math.random();
-  const humanId = state.activePlayerId || "p1";
-  const aiIds = buildSoloAiPlayerIds(humanId);
 
-  for (const aiId of aiIds) {
+  for (const aiId of botPlayerIds) {
     const player = state.players[aiId];
     if (!player || player.status !== "playing") continue;
 
@@ -144,4 +143,15 @@ export function runSoloAITurns(state, config, api) {
       remaining.delete(pick.id);
     }
   }
+}
+
+/**
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {import('./config.js').GAME_CONFIG} config
+ * @param {{ openMarketPositionForPlayer: Function, closePositionForPlayer: Function }} api
+ */
+export function runSoloAITurns(state, config, api) {
+  if (!state.soloWithAI) return;
+  const humanId = state.activePlayerId || "p1";
+  runBotTurns(state, config, api, buildSoloAiPlayerIds(humanId));
 }

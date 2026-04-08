@@ -1,9 +1,10 @@
 import { GAME_CONFIG } from "./config.js";
-import { runSoloAITurns } from "./ai.js";
+import { runBotTurns, runSoloAITurns } from "./ai.js";
 import { computeDeliveryPriceFromOpenInterest, computeNextPriceFromDailyStats } from "./pricing.js";
 import {
   buildEmptyDailyStats,
   buildInitialSpotPool,
+  buildMultiplayerBotIds,
   buildSoloAiPlayerIds,
   createPlayerState,
   DEFAULT_PLAYER_ID,
@@ -200,26 +201,12 @@ function performDelivery(state, config) {
       const spotRem = state.spotPool[id] ?? 0;
       const backpackAvail = pl.backpack[id] ?? 0;
 
-      if (shortQty > spotRem + backpackAvail) {
-        pl.status = "failed";
-        deliveryStress = true;
-        pushLog(
-          state,
-          `💀 ${name} 空头 ${shortQty}手：现货不足(池${spotRem}+背包${backpackAvail})，游戏失败`,
-          config
-        );
-        continue;
-      }
+      const avail = spotRem + backpackAvail;
+      const deliver = Math.min(shortQty, Math.max(0, avail));
+      const deficit = shortQty - deliver;
+      const pay = dPrice * deliver + 10 * dPrice * deficit;
 
-      const pay = dPrice * shortQty;
-      if (pl.cash < pay) {
-        pl.status = "failed";
-        deliveryStress = true;
-        pushLog(state, `💀 ${name} 空头 ${shortQty}手：需付 ${pay.toFixed(2)} 现金不足，游戏失败`, config);
-        continue;
-      }
-
-      let need = shortQty;
+      let need = deliver;
       const useBack = Math.min(need, backpackAvail);
       pl.backpack[id] = backpackAvail - useBack;
       need -= useBack;
@@ -227,11 +214,26 @@ function performDelivery(state, config) {
       state.spotPool[id] = spotRem - fromPool;
       pl.cash -= pay;
       pl.positions[id].short = { qty: 0, avgPrice: 0 };
-      pushLog(
-        state,
-        `📦 ${name} 空头交割 ${shortQty}手：背包-${useBack} 池-${fromPool} 付现 ${pay.toFixed(2)}`,
-        config
-      );
+
+      if (deficit > 0) {
+        pushLog(
+          state,
+          `📦 ${name} 空头交割 ${shortQty}手：背包-${useBack} 池-${fromPool}；缺货 ${deficit} 手按交割价10倍赔偿，付现 ${pay.toFixed(2)}`,
+          config
+        );
+      } else {
+        pushLog(
+          state,
+          `📦 ${name} 空头交割 ${shortQty}手：背包-${useBack} 池-${fromPool} 付现 ${pay.toFixed(2)}`,
+          config
+        );
+      }
+
+      if (pl.cash < 0) {
+        pl.status = "failed";
+        deliveryStress = true;
+        pushLog(state, `💀 ${name} 空头扣款后现金 ${pl.cash.toFixed(2)} < 0，游戏失败`, config);
+      }
     }
   }
 
@@ -259,22 +261,25 @@ function performDelivery(state, config) {
       }
 
       const cost = dPrice * take;
-      if (pl.cash < cost) {
-        pl.status = "failed";
-        deliveryStress = true;
-        pushLog(state, `💀 ${name} 多头 应付 ${cost.toFixed(2)} 现金不足，游戏失败`, config);
-        continue;
-      }
-
       pl.cash -= cost;
       pl.backpack[id] = (pl.backpack[id] ?? 0) + take;
       state.spotPool[id] = spotRem - take;
       pl.positions[id].long = { qty: 0, avgPrice: 0 };
-      pushLog(
-        state,
-        `📦 ${name} 多头交割 ${take}手 @ ${dPrice.toFixed(2)}，付现 ${cost.toFixed(2)}，现货入背包`,
-        config
-      );
+      if (pl.cash < 0) {
+        pl.status = "failed";
+        deliveryStress = true;
+        pushLog(
+          state,
+          `💀 ${name} 多头交割 ${take}手 应付 ${cost.toFixed(2)}，扣款后现金 ${pl.cash.toFixed(2)} < 0，游戏失败`,
+          config
+        );
+      } else {
+        pushLog(
+          state,
+          `📦 ${name} 多头交割 ${take}手 @ ${dPrice.toFixed(2)}，付现 ${cost.toFixed(2)}，现货入背包`,
+          config
+        );
+      }
     }
   }
 
@@ -304,16 +309,20 @@ function performDelivery(state, config) {
       const lp = pl.positions[id].long;
       if (lp.qty <= 0) continue;
       const pay = dPrice * lp.qty;
-      if (pl.cash < pay) {
-        pl.status = "failed";
-        deliveryStress = true;
-        pushLog(state, `💀 ${name} 多头需付 ${pay.toFixed(2)} 购种，现金不足，游戏失败`, config);
-        continue;
-      }
       pl.cash -= pay;
       pl.backpack[id] = (pl.backpack[id] ?? 0) + lp.qty;
       pl.positions[id].long = { qty: 0, avgPrice: 0 };
-      pushLog(state, `🌱 ${name} 多头付 ${pay.toFixed(2)}，种子×${lp.qty} 入背包`, config);
+      if (pl.cash < 0) {
+        pl.status = "failed";
+        deliveryStress = true;
+        pushLog(
+          state,
+          `💀 ${name} 多头需付 ${pay.toFixed(2)} 购种，扣款后现金 ${pl.cash.toFixed(2)} < 0，游戏失败`,
+          config
+        );
+      } else {
+        pushLog(state, `🌱 ${name} 多头付 ${pay.toFixed(2)}，种子×${lp.qty} 入背包`, config);
+      }
     }
   }
 
@@ -409,6 +418,7 @@ function nextDayInternal(state, config) {
  * @param {number} qty
  * @param {typeof GAME_CONFIG} config
  * @param {string} [actorLabel] 日志前缀（如 AI 玩家 id）
+ * 注：风控（riskMinEquity）仅对 `state.botPlayerIds` 中的 AI 生效，人类玩家不拦截。
  */
 export function openMarketPositionForPlayer(state, playerId, commodityId, direction, qty, config, actorLabel) {
   if (state.gameEnded) {
@@ -429,38 +439,40 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
   if (qty === 0) return;
 
   const currentPrice = state.prices[commodityId];
-  const tempPos = JSON.parse(JSON.stringify(player.positions));
-  if (direction === "long") {
-    const old = tempPos[commodityId].long;
-    const newTotalQty = old.qty + qty;
-    const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
-    tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg };
-  } else {
-    const old = tempPos[commodityId].short;
-    const newTotalQty = old.qty + qty;
-    const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
-    tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg };
-  }
-
-  let newFloating = 0;
-  for (const c of config.commodities) {
-    const pid = c.id;
-    const pnow = state.prices[pid];
-    const lp = tempPos[pid].long;
-    if (lp.qty > 0) newFloating += (pnow - lp.avgPrice) * lp.qty;
-    const sp = tempPos[pid].short;
-    if (sp.qty > 0) newFloating += (sp.avgPrice - pnow) * sp.qty;
-  }
-  const newEquity = player.cash + newFloating;
-  if (newEquity < config.rules.riskMinEquity) {
-    pushLog(
-      state,
-      actorLabel
-        ? `[${actorLabel}] ⚠️ 风控拦截: 开仓后预计资产 ${newEquity.toFixed(2)} 过低, 禁止开仓`
-        : `⚠️ 风控拦截: 开仓后预计资产 ${newEquity.toFixed(2)} 过低, 禁止开仓`,
-      config
-    );
-    return;
+  const isBot = state.botPlayerIds?.includes(playerId) ?? false;
+  if (isBot) {
+    const tempPos = JSON.parse(JSON.stringify(player.positions));
+    if (direction === "long") {
+      const old = tempPos[commodityId].long;
+      const newTotalQty = old.qty + qty;
+      const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
+      tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg };
+    } else {
+      const old = tempPos[commodityId].short;
+      const newTotalQty = old.qty + qty;
+      const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
+      tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg };
+    }
+    let newFloating = 0;
+    for (const c of config.commodities) {
+      const pid = c.id;
+      const pnow = state.prices[pid];
+      const lp = tempPos[pid].long;
+      if (lp.qty > 0) newFloating += (pnow - lp.avgPrice) * lp.qty;
+      const sp = tempPos[pid].short;
+      if (sp.qty > 0) newFloating += (sp.avgPrice - pnow) * sp.qty;
+    }
+    const newEquity = player.cash + newFloating;
+    if (newEquity < config.rules.riskMinEquity) {
+      pushLog(
+        state,
+        actorLabel
+          ? `[${actorLabel}] ⚠️ 风控拦截: 开仓后预计资产 ${newEquity.toFixed(2)} 过低, 禁止开仓`
+          : `⚠️ 风控拦截: 开仓后预计资产 ${newEquity.toFixed(2)} 过低, 禁止开仓`,
+        config
+      );
+      return;
+    }
   }
 
   const tag = actorLabel ? `[${actorLabel}] ` : "";
@@ -734,7 +746,21 @@ function resetGame(state, config) {
   state.logEntries = [];
   const pid = state.activePlayerId;
   state.spotPool = buildInitialSpotPool(config);
-  if (state.soloWithAI) {
+  if (state.multiplayerWithBots && state.humanPlayerIds?.length) {
+    const humans = state.humanPlayerIds;
+    const bots =
+      state.botPlayerIds && state.botPlayerIds.length > 0 ? state.botPlayerIds : buildMultiplayerBotIds(humans);
+    state.botPlayerIds = bots;
+    /** @type {Record<string, ReturnType<createPlayerState>>} */
+    const players = {};
+    for (const hid of humans) {
+      players[hid] = createPlayerState(config);
+    }
+    for (const bid of bots) {
+      players[bid] = createPlayerState(config);
+    }
+    state.players = players;
+  } else if (state.soloWithAI) {
     /** @type {Record<string, ReturnType<createPlayerState>>} */
     const players = { [pid]: createPlayerState(config) };
     for (const aid of buildSoloAiPlayerIds(pid)) {
@@ -773,10 +799,17 @@ export function reduce(state, action, config = GAME_CONFIG) {
       resetGame(state, config);
       break;
     case "NEXT_DAY":
-      runSoloAITurns(state, config, {
-        openMarketPositionForPlayer,
-        closePositionForPlayer,
-      });
+      if (state.multiplayerWithBots && state.botPlayerIds?.length) {
+        runBotTurns(state, config, {
+          openMarketPositionForPlayer,
+          closePositionForPlayer,
+        }, state.botPlayerIds);
+      } else {
+        runSoloAITurns(state, config, {
+          openMarketPositionForPlayer,
+          closePositionForPlayer,
+        });
+      }
       nextDayInternal(state, config);
       break;
     case "OPEN_MARKET":

@@ -16,6 +16,26 @@ export function buildSoloAiPlayerIds(humanId) {
   return ids;
 }
 
+/**
+ * 多人模式：固定 4 名电脑，id 不与真人冲突。
+ * @param {string[]} humanIds
+ * @param {number} [count]
+ * @returns {string[]}
+ */
+export function buildMultiplayerBotIds(humanIds, count = 4) {
+  const used = new Set(humanIds);
+  const out = [];
+  let n = 0;
+  while (out.length < count) {
+    const id = `mp_bot_${n}`;
+    n += 1;
+    if (used.has(id)) continue;
+    used.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 const PLAYER_ID_MAX_LEN = 32;
 const UNSAFE_PLAYER_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -108,20 +128,47 @@ export function buildEmptyDailyStats(commodities) {
 
 /**
  * @param {typeof GAME_CONFIG} [config]
- * @param {{ playerId?: string, soloWithAI?: boolean }} [options]
+ * @param {{
+ *   playerId?: string,
+ *   soloWithAI?: boolean,
+ *   multiplayerWithBots?: boolean,
+ *   humanPlayerIds?: string[],
+ * }} [options]
  */
 export function createInitialGameState(config = GAME_CONFIG, options = {}) {
   const id = normalizePlayerId(options.playerId) ?? DEFAULT_PLAYER_ID;
   const soloWithAI = !!options.soloWithAI;
-  /** @type {Record<string, ReturnType<createPlayerState>>} */
-  const players = {
-    [id]: createPlayerState(config),
-  };
-  if (soloWithAI) {
-    for (const aid of buildSoloAiPlayerIds(id)) {
-      players[aid] = createPlayerState(config);
-    }
+  const multiplayerWithBots = !!options.multiplayerWithBots;
+  const rawHumans = options.humanPlayerIds;
+  /** @type {string[]} */
+  let humanPlayerIds = [];
+  if (multiplayerWithBots && Array.isArray(rawHumans) && rawHumans.length > 0) {
+    humanPlayerIds = rawHumans.map((x) => normalizePlayerId(x) ?? String(x)).filter(Boolean);
   }
+  /** @type {string[]} */
+  let botPlayerIds = [];
+  /** @type {Record<string, ReturnType<createPlayerState>>} */
+  const players = {};
+
+  if (multiplayerWithBots && humanPlayerIds.length > 0) {
+    for (const hid of humanPlayerIds) {
+      players[hid] = createPlayerState(config);
+    }
+    botPlayerIds = buildMultiplayerBotIds(humanPlayerIds);
+    for (const bid of botPlayerIds) {
+      players[bid] = createPlayerState(config);
+    }
+  } else {
+    players[id] = createPlayerState(config);
+    if (soloWithAI) {
+      for (const aid of buildSoloAiPlayerIds(id)) {
+        players[aid] = createPlayerState(config);
+      }
+    }
+    humanPlayerIds = [];
+    botPlayerIds = [];
+  }
+
   return {
     prices: { ...config.initial.prices },
     dailyStats: buildEmptyDailyStats(config.commodities),
@@ -135,6 +182,11 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     logEntries: [],
     activePlayerId: id,
     soloWithAI,
+    multiplayerWithBots: multiplayerWithBots && humanPlayerIds.length > 0,
+    /** @type {string[]} */
+    humanPlayerIds,
+    /** @type {string[]} */
+    botPlayerIds,
     spotPool: buildInitialSpotPool(config),
     players,
   };
@@ -166,6 +218,9 @@ export function cloneGameState(state) {
     logEntries: [...state.logEntries],
     activePlayerId: state.activePlayerId,
     soloWithAI: !!state.soloWithAI,
+    multiplayerWithBots: !!state.multiplayerWithBots,
+    humanPlayerIds: state.humanPlayerIds ? [...state.humanPlayerIds] : [],
+    botPlayerIds: state.botPlayerIds ? [...state.botPlayerIds] : [],
     spotPool: { ...state.spotPool },
     players: JSON.parse(JSON.stringify(state.players)),
   };
