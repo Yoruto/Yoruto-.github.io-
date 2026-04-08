@@ -19,8 +19,6 @@ export function createPlayroomRoomTransport(P, config) {
   let onJoinUnsub = null;
   /** @type {Set<() => void>} */
   const listeners = new Set();
-  /** @type {boolean} */
-  let skipLobbyMode = false;
 
   function notify() {
     listeners.forEach((fn) => fn());
@@ -49,10 +47,11 @@ export function createPlayroomRoomTransport(P, config) {
         prof = null;
       }
       const name = prof && prof.name ? String(prof.name) : String(p.id);
+      const pid = String(p.id);
       return {
-        id: String(p.id),
+        id: pid,
         displayName: name,
-        ready: true,
+        ready: !!P.getState(`playerReady_${pid}`),
       };
     });
     const nextDayReady = {};
@@ -65,7 +64,7 @@ export function createPlayroomRoomTransport(P, config) {
       roomId,
       hostPlayerId,
       players,
-      gameStarted: true,
+      gameStarted: !!P.getState("gameStarted"),
       nextDayReady,
     };
     return cachedSession;
@@ -87,15 +86,16 @@ export function createPlayroomRoomTransport(P, config) {
   }
 
   /**
-   * 设置 Playroom 玩家显示名
+   * 设置 Playroom 玩家显示名（官方 API：PlayerState.setState("profile", …)，非 setProfile）
    * @param {string} name
    */
   function setPlayroomProfileName(name) {
     try {
       const player = P.myPlayer();
-      if (player && player.setProfile) {
-        player.setProfile({ name: String(name) });
-      }
+      if (!player || typeof player.getState !== "function" || typeof player.setState !== "function") return;
+      const cur = player.getState("profile");
+      const base = cur && typeof cur === "object" ? cur : {};
+      player.setState("profile", { ...base, name: String(name) }, true);
     } catch (e) {
       console.warn("设置 Playroom profile 失败:", e);
     }
@@ -124,19 +124,12 @@ export function createPlayroomRoomTransport(P, config) {
     }
     await P.waitForState("hostPlayerId");
     connected = true;
-    skipLobbyMode = !!options.skipLobby;
     rebuildSession();
     onJoinUnsub = P.onPlayerJoin(() => {
       rebuildSession();
       notify();
     });
-    // 监听游戏开始状态（非房主用）- Playroom 使用 onStateSet
-    P.onStateSet("gameStarted", (started) => {
-      if (started && cachedSession) {
-        cachedSession.gameStarted = true;
-        notify();
-      }
-    });
+    // Playroom 0.0.95 无 onStateSet/onStateChange；room 状态用 getState，由下方轮询 + rebuildSession 同步
     startPolling();
     notify();
   }
