@@ -30,6 +30,8 @@ export const GAME_CONFIG = {
     minMoveRatio: 0.001,
     /** 涨跌停：次日变动比例绝对值封顶 ±20% */
     limitMoveRatio: 0.2,
+    /** 开仓保证金：按成交价 × 手数 × 比例从现金中冻结；平仓时按比例释放 */
+    marginRate: 0.1,
   },
   /** 功能开关（限价单/挂单簿可在此恢复） */
   features: {

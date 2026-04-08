@@ -1,4 +1,4 @@
-import { buildSoloAiPlayerIds } from "./state.js";
+import { buildSoloAiPlayerIds, totalMarginLockedForPlayer } from "./state.js";
 
 /**
  * @param {unknown[]} array
@@ -27,17 +27,22 @@ function wouldPassRisk(state, playerId, commodityId, direction, qty, config) {
   const player = state.players[playerId];
   if (!player || qty <= 0) return false;
   const currentPrice = state.prices[commodityId];
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return false;
+  const marginAdd = config.rules.marginRate * currentPrice * qty;
+  if (player.cash < marginAdd) return false;
   const tempPos = JSON.parse(JSON.stringify(player.positions));
   if (direction === "long") {
     const old = tempPos[commodityId].long;
     const newTotalQty = old.qty + qty;
     const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
-    tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg };
+    const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+    tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg, marginLocked: newMarginLocked };
   } else {
     const old = tempPos[commodityId].short;
     const newTotalQty = old.qty + qty;
     const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
-    tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg };
+    const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+    tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg, marginLocked: newMarginLocked };
   }
   let newFloating = 0;
   for (const c of config.commodities) {
@@ -48,7 +53,8 @@ function wouldPassRisk(state, playerId, commodityId, direction, qty, config) {
     const sp = tempPos[pid].short;
     if (sp.qty > 0) newFloating += (sp.avgPrice - pnow) * sp.qty;
   }
-  const newEquity = player.cash + newFloating;
+  const newEquity =
+    player.cash - marginAdd + totalMarginLockedForPlayer({ positions: tempPos }, config.commodities) + newFloating;
   return newEquity >= config.rules.riskMinEquity;
 }
 
@@ -64,7 +70,8 @@ function maxFeasibleOpenQty(state, playerId, comm, direction, config) {
   const price = state.prices[id];
   const player = state.players[playerId];
   if (!player || price <= 0 || player.cash <= 0) return 0;
-  let maxQty = Math.floor((0.3 * player.cash) / price);
+  const mr = config.rules.marginRate;
+  let maxQty = Math.floor(player.cash / (mr * price));
   if (type === "crop" && direction === "short") {
     const spot = state.spotPool[id] ?? 0;
     const cap = Math.floor(0.2 * spot);

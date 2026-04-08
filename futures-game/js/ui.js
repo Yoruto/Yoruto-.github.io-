@@ -547,7 +547,16 @@ export function mountApp(root, ctx) {
 
       if (action === "market-long" || action === "market-short") {
         const dir = action === "market-long" ? "long" : "short";
-        const qty = promptQty(`输入开仓数量 (${dir === "long" ? "做多" : "做空"} 数量)`, "1");
+        const gs = getGameState();
+        const pl = getActivePlayer(gs);
+        const px = gs.prices[commodityId] ?? 0;
+        const mr = config.rules.marginRate;
+        const maxHands =
+          pl.status !== "failed" && px > 0 && pl.cash > 0 ? Math.floor(pl.cash / (mr * px)) : 0;
+        const qty = promptQty(
+          `输入开仓数量 (${dir === "long" ? "做多" : "做空"} 数量)，最大可开 ${maxHands} 手`,
+          maxHands > 0 ? String(maxHands) : "1"
+        );
         if (qty == null) return;
         dispatch({ type: "OPEN_MARKET", commodityId, direction: dir, qty });
         renderGame();

@@ -9,6 +9,7 @@ import {
   createPlayerState,
   DEFAULT_PLAYER_ID,
   getActivePlayer,
+  totalMarginLockedForPlayer,
 } from "./state.js";
 
 /**
@@ -31,7 +32,7 @@ export function computeEquityForPlayer(state, playerId, config = GAME_CONFIG) {
       floating += (pos.short.avgPrice - currPrice) * pos.short.qty;
     }
   }
-  return player.cash + floating;
+  return player.cash + totalMarginLockedForPlayer(player, config.commodities) + floating;
 }
 
 /**
@@ -124,12 +125,23 @@ function checkOrdersMatch(state, config) {
     if (shouldMatch) {
       const comm = config.commodities.find((c) => c.id === order.commodityId);
       const name = comm ? comm.name : order.commodityId;
+      const marginAdd = config.rules.marginRate * order.price * order.quantity;
+      if (player.cash < marginAdd) {
+        pushLog(
+          state,
+          `❌ 挂单无法成交: ${name} 现金不足以支付保证金 (需 ${marginAdd.toFixed(2)})`,
+          config
+        );
+        continue;
+      }
       if (order.type === "long") {
         bumpDailyStat(state, order.commodityId, "openLong", order.quantity);
         const old = player.positions[order.commodityId].long;
         const newQty = old.qty + order.quantity;
         const newAvg = (old.qty * old.avgPrice + order.quantity * order.price) / newQty;
-        player.positions[order.commodityId].long = { qty: newQty, avgPrice: newAvg };
+        const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+        player.cash -= marginAdd;
+        player.positions[order.commodityId].long = { qty: newQty, avgPrice: newAvg, marginLocked: newMarginLocked };
         pushLog(
           state,
           `✅ 挂单成交: ${name} 限价买入开多 ${order.quantity}手 @ ${order.price.toFixed(2)} (触发价${currentPrice.toFixed(2)})`,
@@ -140,7 +152,9 @@ function checkOrdersMatch(state, config) {
         const old = player.positions[order.commodityId].short;
         const newQty = old.qty + order.quantity;
         const newAvg = (old.qty * old.avgPrice + order.quantity * order.price) / newQty;
-        player.positions[order.commodityId].short = { qty: newQty, avgPrice: newAvg };
+        const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+        player.cash -= marginAdd;
+        player.positions[order.commodityId].short = { qty: newQty, avgPrice: newAvg, marginLocked: newMarginLocked };
         pushLog(
           state,
           `✅ 挂单成交: ${name} 限价卖出开空 ${order.quantity}手 @ ${order.price.toFixed(2)} (触发价${currentPrice.toFixed(2)})`,
@@ -212,8 +226,9 @@ function performDelivery(state, config) {
       need -= useBack;
       const fromPool = need;
       state.spotPool[id] = spotRem - fromPool;
-      pl.cash -= pay;
-      pl.positions[id].short = { qty: 0, avgPrice: 0 };
+      const shortMargin = pl.positions[id].short.marginLocked ?? 0;
+      pl.cash += shortMargin - pay;
+      pl.positions[id].short = { qty: 0, avgPrice: 0, marginLocked: 0 };
 
       if (deficit > 0) {
         pushLog(
@@ -255,16 +270,19 @@ function performDelivery(state, config) {
       const take = Math.min(longQty, spotRem);
 
       if (take === 0) {
-        pl.positions[id].long = { qty: 0, avgPrice: 0 };
+        const longMargin = pl.positions[id].long.marginLocked ?? 0;
+        pl.cash += longMargin;
+        pl.positions[id].long = { qty: 0, avgPrice: 0, marginLocked: 0 };
         pushLog(state, `📦 ${name} 多头 ${longQty}手：现货池无货，无需付现，头寸了结`, config);
         continue;
       }
 
       const cost = dPrice * take;
-      pl.cash -= cost;
+      const longMargin = pl.positions[id].long.marginLocked ?? 0;
+      pl.cash += longMargin - cost;
       pl.backpack[id] = (pl.backpack[id] ?? 0) + take;
       state.spotPool[id] = spotRem - take;
-      pl.positions[id].long = { qty: 0, avgPrice: 0 };
+      pl.positions[id].long = { qty: 0, avgPrice: 0, marginLocked: 0 };
       if (pl.cash < 0) {
         pl.status = "failed";
         deliveryStress = true;
@@ -294,8 +312,9 @@ function performDelivery(state, config) {
       const sp = pl.positions[id].short;
       if (sp.qty <= 0) continue;
       const profit = (sp.avgPrice - dPrice) * sp.qty;
-      pl.cash += profit;
-      pl.positions[id].short = { qty: 0, avgPrice: 0 };
+      const released = sp.marginLocked ?? 0;
+      pl.cash += released + profit;
+      pl.positions[id].short = { qty: 0, avgPrice: 0, marginLocked: 0 };
       pushLog(
         state,
         `🌱 ${name} 空头现金结算 ${sp.qty}手 盈亏 ${profit >= 0 ? "+" : ""}${profit.toFixed(2)}`,
@@ -309,9 +328,10 @@ function performDelivery(state, config) {
       const lp = pl.positions[id].long;
       if (lp.qty <= 0) continue;
       const pay = dPrice * lp.qty;
-      pl.cash -= pay;
+      const released = lp.marginLocked ?? 0;
+      pl.cash += released - pay;
       pl.backpack[id] = (pl.backpack[id] ?? 0) + lp.qty;
-      pl.positions[id].long = { qty: 0, avgPrice: 0 };
+      pl.positions[id].long = { qty: 0, avgPrice: 0, marginLocked: 0 };
       if (pl.cash < 0) {
         pl.status = "failed";
         deliveryStress = true;
@@ -439,6 +459,23 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
   if (qty === 0) return;
 
   const currentPrice = state.prices[commodityId];
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    pushLog(state, actorLabel ? `[${actorLabel}] ❌ 价格无效` : "❌ 价格无效", config);
+    return;
+  }
+
+  const marginAdd = config.rules.marginRate * currentPrice * qty;
+  if (player.cash < marginAdd) {
+    pushLog(
+      state,
+      actorLabel
+        ? `[${actorLabel}] ❌ 现金不足，需保证金 ${marginAdd.toFixed(2)} (当前现金 ${player.cash.toFixed(2)})`
+        : `❌ 现金不足，需保证金 ${marginAdd.toFixed(2)} (当前现金 ${player.cash.toFixed(2)})`,
+      config
+    );
+    return;
+  }
+
   const isBot = state.botPlayerIds?.includes(playerId) ?? false;
   if (isBot) {
     const tempPos = JSON.parse(JSON.stringify(player.positions));
@@ -446,12 +483,14 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
       const old = tempPos[commodityId].long;
       const newTotalQty = old.qty + qty;
       const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
-      tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg };
+      const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+      tempPos[commodityId].long = { qty: newTotalQty, avgPrice: newAvg, marginLocked: newMarginLocked };
     } else {
       const old = tempPos[commodityId].short;
       const newTotalQty = old.qty + qty;
       const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotalQty;
-      tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg };
+      const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+      tempPos[commodityId].short = { qty: newTotalQty, avgPrice: newAvg, marginLocked: newMarginLocked };
     }
     let newFloating = 0;
     for (const c of config.commodities) {
@@ -462,7 +501,9 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
       const sp = tempPos[pid].short;
       if (sp.qty > 0) newFloating += (sp.avgPrice - pnow) * sp.qty;
     }
-    const newEquity = player.cash + newFloating;
+    const tempPlayer = { positions: tempPos };
+    const newMarginTotal = totalMarginLockedForPlayer(tempPlayer, config.commodities);
+    const newEquity = player.cash - marginAdd + newMarginTotal + newFloating;
     if (newEquity < config.rules.riskMinEquity) {
       pushLog(
         state,
@@ -476,12 +517,14 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
   }
 
   const tag = actorLabel ? `[${actorLabel}] ` : "";
+  player.cash -= marginAdd;
   if (direction === "long") {
     bumpDailyStat(state, commodityId, "openLong", qty);
     const old = player.positions[commodityId].long;
     const newTotal = old.qty + qty;
     const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotal;
-    player.positions[commodityId].long = { qty: newTotal, avgPrice: newAvg };
+    const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+    player.positions[commodityId].long = { qty: newTotal, avgPrice: newAvg, marginLocked: newMarginLocked };
     pushLog(
       state,
       `${tag}🎯 市价开多 ${commodityName(config, commodityId)} ${qty}手 @ ${currentPrice.toFixed(2)}`,
@@ -492,7 +535,8 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
     const old = player.positions[commodityId].short;
     const newTotal = old.qty + qty;
     const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotal;
-    player.positions[commodityId].short = { qty: newTotal, avgPrice: newAvg };
+    const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+    player.positions[commodityId].short = { qty: newTotal, avgPrice: newAvg, marginLocked: newMarginLocked };
     pushLog(
       state,
       `${tag}🎯 市价开空 ${commodityName(config, commodityId)} ${qty}手 @ ${currentPrice.toFixed(2)}`,
@@ -540,27 +584,30 @@ export function closePositionForPlayer(state, playerId, commodityId, direction, 
 
   const currPrice = state.prices[commodityId];
   let profit = 0;
+  const locked = pos.marginLocked ?? 0;
+  const released = pos.qty > 0 ? (locked * qty) / pos.qty : 0;
+  const remLocked = locked - released;
   const tag = actorLabel ? `[${actorLabel}] ` : "";
   if (direction === "long") {
     bumpDailyStat(state, commodityId, "longClose", qty);
     profit = (currPrice - pos.avgPrice) * qty;
     const newQty = pos.qty - qty;
     if (newQty === 0) {
-      player.positions[commodityId].long = { qty: 0, avgPrice: 0 };
+      player.positions[commodityId].long = { qty: 0, avgPrice: 0, marginLocked: 0 };
     } else {
-      player.positions[commodityId].long = { qty: newQty, avgPrice: pos.avgPrice };
+      player.positions[commodityId].long = { qty: newQty, avgPrice: pos.avgPrice, marginLocked: remLocked };
     }
   } else {
     bumpDailyStat(state, commodityId, "shortClose", qty);
     profit = (pos.avgPrice - currPrice) * qty;
     const newQty = pos.qty - qty;
     if (newQty === 0) {
-      player.positions[commodityId].short = { qty: 0, avgPrice: 0 };
+      player.positions[commodityId].short = { qty: 0, avgPrice: 0, marginLocked: 0 };
     } else {
-      player.positions[commodityId].short = { qty: newQty, avgPrice: pos.avgPrice };
+      player.positions[commodityId].short = { qty: newQty, avgPrice: pos.avgPrice, marginLocked: remLocked };
     }
   }
-  player.cash += profit;
+  player.cash += released + profit;
   pushLog(
     state,
     `${tag}💸 平仓 ${direction === "long" ? "多单" : "空单"} ${commodityName(config, commodityId)} ${qty}手，盈亏: ${profit >= 0 ? `+${profit.toFixed(2)}` : `${profit.toFixed(2)}`}`,

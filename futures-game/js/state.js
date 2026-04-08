@@ -56,15 +56,29 @@ export function normalizePlayerId(raw) {
  * @param {typeof GAME_CONFIG.commodities} commodities
  */
 export function buildEmptyPositions(commodities) {
-  /** @type {Record<string, { long: { qty: number, avgPrice: number }, short: { qty: number, avgPrice: number } }>} */
+  /** @type {Record<string, { long: { qty: number, avgPrice: number, marginLocked: number }, short: { qty: number, avgPrice: number, marginLocked: number } }>} */
   const positions = {};
   for (const c of commodities) {
     positions[c.id] = {
-      long: { qty: 0, avgPrice: 0 },
-      short: { qty: 0, avgPrice: 0 },
+      long: { qty: 0, avgPrice: 0, marginLocked: 0 },
+      short: { qty: 0, avgPrice: 0, marginLocked: 0 },
     };
   }
   return positions;
+}
+
+/**
+ * @param {{ positions: Record<string, { long: { marginLocked?: number }, short: { marginLocked?: number } }> }} player
+ * @param {typeof GAME_CONFIG.commodities} commodities
+ */
+export function totalMarginLockedForPlayer(player, commodities) {
+  let sum = 0;
+  for (const c of commodities) {
+    const p = player.positions[c.id];
+    sum += p.long.marginLocked ?? 0;
+    sum += p.short.marginLocked ?? 0;
+  }
+  return sum;
 }
 
 /**
