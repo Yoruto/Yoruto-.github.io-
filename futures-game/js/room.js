@@ -1,6 +1,6 @@
 /**
- * 房间会话与本地 Transport 模拟。在线模式由 Playroom Kit 实现，保持方法签名一致。
- * nextDayReady 在真联机时需由服务端同步；当前为单进程内存，仅本标签页有效。
+ * 房间会话与本地 Transport 模拟（单标签页内存）。
+ * nextDayReady 在真联机时需由同步适配器/服务端实现；当前为单进程内存。
  */
 
 import { normalizePlayerId } from "./state.js";
