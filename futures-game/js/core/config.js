@@ -116,6 +116,8 @@ export const GAME_CONFIG = {
     futuresFeeMax: 500,
     /** 做空上限：maxShortQty 相关（现金+库存货值）× 系数（创业板后） */
     shortNotionalCapRatio: 0.5,
+    /** K线与量能图最多保留根数（按日） */
+    chartHistoryBars: 120,
   },
   features: {
     limitOrders: false,

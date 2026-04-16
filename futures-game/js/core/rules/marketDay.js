@@ -53,6 +53,7 @@ function farmGrowthStep(state, config) {
  */
 export function applyFuturesEndOfDay(state, config) {
   const tradable = futuresTradableCommodities(config);
+  const keepBars = Math.max(7, Math.floor(config.rules?.chartHistoryBars ?? 120));
   const parts = [];
   for (const c of tradable) {
     const id = c.id;
@@ -73,13 +74,28 @@ export function applyFuturesEndOfDay(state, config) {
     hist.push(totalVol);
     if (!state.futuresPriceHistory[id]) state.futuresPriceHistory[id] = [];
     const fq = state.futuresPriceHistory[id];
+    if (!state.futuresOpenHistory) state.futuresOpenHistory = {};
+    if (!state.futuresOpenHistory[id]) state.futuresOpenHistory[id] = [];
+    if (!state.futuresVolumeHistory) state.futuresVolumeHistory = {};
+    if (!state.futuresVolumeHistory[id]) state.futuresVolumeHistory[id] = [];
+    if (!state.futuresChartGlobalDays) state.futuresChartGlobalDays = {};
+    if (!state.futuresChartGlobalDays[id]) state.futuresChartGlobalDays[id] = [];
+    const fo = state.futuresOpenHistory[id];
+    const fv = state.futuresVolumeHistory[id];
+    const fg = state.futuresChartGlobalDays[id];
+    fo.push(closeToday);
     fq.push(next);
-    if (fq.length > 7) fq.shift();
+    fv.push(totalVol);
+    fg.push(state.globalDay);
+    if (fo.length > keepBars) fo.shift();
+    if (fq.length > keepBars) fq.shift();
+    if (fv.length > keepBars) fv.shift();
+    if (fg.length > keepBars) fg.shift();
     if (!state.spotPriceHistory) state.spotPriceHistory = {};
     if (!state.spotPriceHistory[id]) state.spotPriceHistory[id] = [];
     const sq = state.spotPriceHistory[id];
     sq.push(state.spotPrices[id] ?? next);
-    if (sq.length > 7) sq.shift();
+    if (sq.length > keepBars) sq.shift();
     parts.push(`${c.name} ${next.toFixed(2)}`);
   }
   state.dailyStats = buildEmptyDailyStats(config.commodities);

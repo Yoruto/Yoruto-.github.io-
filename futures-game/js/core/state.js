@@ -287,9 +287,15 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     eventFactorByCrop: /** @type {Record<string, number>} */ ({}),
     /** 5 日滚动成交量（每作物 5 槽） */
     volumeHistory5d: buildEmptyVolumeHistory(config),
-    /** 期货价历史（最近 7 日收盘，每作物） */
+    /** 期货价历史（最近 N 日收盘，每作物；N 由 rules.chartHistoryBars 控制） */
     futuresPriceHistory: /** @type {Record<string, number[]>} */ ({}),
-    /** 现货价历史（最近 7 日，每作物，UI 走势） */
+    /** 与 futuresPriceHistory 同序：当日开盘（日终调价前价） */
+    futuresOpenHistory: /** @type {Record<string, number[]>} */ ({}),
+    /** 与 futuresPriceHistory 同序：当日合约成交量合计 */
+    futuresVolumeHistory: /** @type {Record<string, number[]>} */ ({}),
+    /** 与 futuresPriceHistory 同序：对应 globalDay（用于 K 线时间轴） */
+    futuresChartGlobalDays: /** @type {Record<string, number[]>} */ ({}),
+    /** 现货价历史（最近 N 日，每作物，UI 走势） */
     spotPriceHistory: /** @type {Record<string, number[]>} */ ({}),
     /** 上一日现货池快照（用于计算因子） */
     spotPoolSnapshot: { ...buildInitialSpotPool(config) },

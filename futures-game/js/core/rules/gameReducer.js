@@ -880,6 +880,9 @@ function resetGame(state, config) {
   state.longEvent = null;
   state.eventFactorByCrop = {};
   state.futuresPriceHistory = {};
+  state.futuresOpenHistory = {};
+  state.futuresVolumeHistory = {};
+  state.futuresChartGlobalDays = {};
   state.spotPriceHistory = {};
   state.lastGossip = null;
   state.volumeHistory5d = {};

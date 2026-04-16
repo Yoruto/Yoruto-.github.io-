@@ -357,38 +357,36 @@
             line-height: 1.45;
             color: #e9dcc3;
         }
-        .futures-chart-block {
+        .futures-tab-row {
             display: flex;
-            align-items: flex-end;
-            gap: 10px;
+            flex-wrap: wrap;
+            gap: 6px;
             margin-bottom: 10px;
+            align-items: center;
         }
-        .futures-chart-label {
-            flex: 0 0 auto;
-            min-width: 4.5em;
+        .futures-tab {
+            background: #2b241c;
+            border: 1px solid #5c4a38;
             color: #e9c891;
+            border-radius: 999px;
+            padding: 5px 12px;
             font-size: 0.78rem;
-            padding-bottom: 4px;
+            cursor: pointer;
         }
-        .futures-mini-chart {
-            display: flex;
-            align-items: flex-end;
-            gap: 4px;
-            flex: 1;
-            min-height: 44px;
-            padding: 4px 0;
+        .futures-tab:hover {
+            border-color: #dbb87c;
+            color: #ffeaac;
         }
-        .futures-bar {
-            width: 8px;
-            min-height: 4px;
-            border-radius: 2px 2px 0 0;
-            flex-shrink: 0;
+        .futures-tab-active {
+            background: #3d2c21;
+            border-color: #dbb87c;
+            color: #ffeaac;
+            box-shadow: inset 0 0 0 1px rgba(219, 184, 124, 0.35);
         }
-        .futures-bar-up {
-            background: linear-gradient(180deg, #7ecf8f 0%, #3d7a4a 100%);
-        }
-        .futures-bar-down {
-            background: linear-gradient(180deg, #f0a090 0%, #8b3c2c 100%);
+        .futures-lwc-mount {
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid rgba(219, 184, 124, 0.2);
         }
         .backpack-subtitle {
             font-size: 0.85rem;
@@ -554,7 +552,7 @@
         </table>
 
         <div class="positions-area">
-            <div class="section-title">📈 期货近 7 日收盘（红绿柱：相邻两日涨跌幅度）</div>
+            <div class="section-title">📈 期货日 K（历史）与成交量 · 页签切换品种</div>
             <div id="futuresPriceChart" class="futures-chart-wrap"></div>
         </div>
 

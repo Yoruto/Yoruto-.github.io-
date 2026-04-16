@@ -1,4 +1,5 @@
 import { futuresTradableCommodities } from "../config.js";
+import { buildFuturesLwcSeriesData, createFuturesLwcChart } from "./futuresLwcChart.js";
 import { computeEquity, maxOpenMarketQty } from "../logic.js";
 import { DEFAULT_PLAYER_ID, getActivePlayer, normalizePlayerId } from "../state.js";
 
@@ -21,44 +22,6 @@ function futuresDayOverDayChange(h, currentPrice) {
   const cls = pct > 0 ? "chg-up" : pct < 0 ? "chg-down" : "chg-neutral";
   const sign = pct > 0 ? "+" : "";
   return { text: `${sign}${pct.toFixed(2)}%`, cls };
-}
-
-/**
- * 日终相邻收盘之间的红绿柱（柱高为窗口内归一化振幅）
- * @param {number[]} h oldest..newest
- * @returns {string}
- */
-function buildFuturesMiniChartHtml(h) {
-  if (!h || h.length < 2) {
-    return '<span class="chg-neutral">数据不足（至少经过 2 次日终收盘）</span>';
-  }
-  /** @type {{ up: boolean, absRatio: number, title: string }[]} */
-  const deltas = [];
-  let maxAbsPct = 0;
-  for (let k = 0; k < h.length - 1; k++) {
-    const a = h[k];
-    const b = h[k + 1];
-    if (!(a > 0)) continue;
-    const signedPct = ((b - a) / a) * 100;
-    const absRatio = Math.abs((b - a) / a);
-    deltas.push({
-      up: b >= a,
-      absRatio,
-      title: `${signedPct >= 0 ? "+" : ""}${signedPct.toFixed(2)}%`,
-    });
-    if (absRatio > maxAbsPct) maxAbsPct = absRatio;
-  }
-  if (deltas.length === 0) {
-    return '<span class="chg-neutral">—</span>';
-  }
-  if (maxAbsPct < 1e-12) maxAbsPct = 1e-12;
-  const maxH = 40;
-  const parts = deltas.map((d) => {
-    const hPx = Math.max(4, Math.round((d.absRatio / maxAbsPct) * maxH));
-    const barCls = d.up ? "futures-bar futures-bar-up" : "futures-bar futures-bar-down";
-    return `<span class="${barCls}" style="height:${hPx}px" title="${d.title}"></span>`;
-  });
-  return `<div class="futures-mini-chart">${parts.join("")}</div>`;
 }
 
 /**
@@ -149,6 +112,10 @@ export function mountApp(root, ctx) {
 
   /** 用户关闭终局排名弹窗后，不再在每次 render 时强制弹出 */
   let endModalDismissed = false;
+
+  let selectedFuturesCommodityId = futuresTradableCommodities(config)[0]?.id ?? "pumpkin";
+  /** @type {null | { api: ReturnType<typeof createFuturesLwcChart>, tabRow: HTMLElement }} */
+  let futuresLwcUi = null;
 
   if (playerIdInput) {
     try {
@@ -392,14 +359,45 @@ export function mountApp(root, ctx) {
     }
 
     if (futuresPriceChart) {
-      const blocks = [];
-      for (const c of futuresTradableCommodities(config)) {
-        const h = state.futuresPriceHistory[c.id] ?? [];
-        blocks.push(
-          `<div class="futures-chart-block"><span class="futures-chart-label">${c.name}</span>${buildFuturesMiniChartHtml(h)}</div>`
-        );
+      const tradable = futuresTradableCommodities(config);
+      if (!tradable.some((c) => c.id === selectedFuturesCommodityId)) {
+        selectedFuturesCommodityId = tradable[0]?.id ?? "pumpkin";
       }
-      futuresPriceChart.innerHTML = blocks.join("");
+      if (!futuresLwcUi) {
+        futuresPriceChart.innerHTML = "";
+        const tabRow = document.createElement("div");
+        tabRow.className = "futures-tab-row";
+        for (const c of tradable) {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "futures-tab";
+          btn.dataset.futuresTabId = c.id;
+          btn.textContent = c.name;
+          tabRow.appendChild(btn);
+        }
+        const mount = document.createElement("div");
+        mount.className = "futures-lwc-mount";
+        mount.style.height = "300px";
+        mount.style.width = "100%";
+        futuresPriceChart.appendChild(tabRow);
+        futuresPriceChart.appendChild(mount);
+        const api = createFuturesLwcChart(mount);
+        futuresLwcUi = { api, tabRow };
+        tabRow.addEventListener("click", (e) => {
+          const b = /** @type {HTMLElement | null} */ (e.target).closest("[data-futures-tab-id]");
+          if (!b?.dataset.futuresTabId) return;
+          selectedFuturesCommodityId = b.dataset.futuresTabId;
+          void renderGame();
+        });
+      }
+      for (const btn of futuresLwcUi.tabRow.querySelectorAll("[data-futures-tab-id]")) {
+        const el = /** @type {HTMLElement} */ (btn);
+        el.classList.toggle("futures-tab-active", el.dataset.futuresTabId === selectedFuturesCommodityId);
+      }
+      const { candles, volumes } = buildFuturesLwcSeriesData(state, config, selectedFuturesCommodityId);
+      futuresLwcUi.api.candleSeries.setData(candles);
+      futuresLwcUi.api.volumeSeries.setData(volumes);
+      if (candles.length > 0) futuresLwcUi.api.chart.timeScale().fitContent();
     }
 
     const uiLocked = gameOver || player.status === "failed" || player.status === "eliminated";
