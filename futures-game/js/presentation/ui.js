@@ -187,7 +187,7 @@ export function mountApp(root, ctx) {
     if (!gameOver) {
       endModalDismissed = false;
     }
-    const totalGameDays = config.rules?.totalGameDays ?? 28;
+    const totalGameDays = state.totalGameDays ?? config.economy.totalWeeks * config.economy.cycleDays;
     const globalDay = state.globalDay ?? state.currentDay;
 
     const cashDisplay = viewGame.querySelector("#cashDisplay");
@@ -206,6 +206,161 @@ export function mountApp(root, ctx) {
     const debtDisplay = viewGame.querySelector("#debtDisplay");
     if (weekDisplay) weekDisplay.textContent = String(state.globalWeek ?? 1);
     if (debtDisplay) debtDisplay.textContent = (state.debt ?? 0).toLocaleString();
+
+    const farmPlotsRow = viewGame.querySelector("#farmPlotsRow");
+    const merchantSeedsRow = viewGame.querySelector("#merchantSeedsRow");
+    const merchantFertRow = viewGame.querySelector("#merchantFertRow");
+    const warehouseRow = viewGame.querySelector("#warehouseRow");
+    const npcSelect = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcSelect"));
+    const npcCropSelect = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcCropSelect"));
+    const futuresPriceChart = viewGame.querySelector("#futuresPriceChart");
+    const gossipHint = viewGame.querySelector("#gossipHint");
+
+    if (farmPlotsRow) {
+      farmPlotsRow.innerHTML = "";
+      const plots = player.farmPlots ?? [];
+      const disabledFarm = player.status === "failed" || player.status === "eliminated" || gameOver;
+      if (plots.length === 0) {
+        farmPlotsRow.innerHTML = "<span style='opacity:0.7'>暂无地块（请用种子种植）</span>";
+      } else {
+        plots.forEach((plot, idx) => {
+          const comm = config.commodities.find((c) => c.id === plot.cropId);
+          const name = comm ? comm.name : plot.cropId;
+          const wrap = document.createElement("span");
+          wrap.style.cssText = "display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;background:#2b241c;border-radius:12px;padding:4px 8px;";
+          wrap.innerHTML = `<span>${name} 剩${plot.daysLeft}天</span>`;
+          const bn = document.createElement("button");
+          bn.type = "button";
+          bn.textContent = "普肥";
+          bn.disabled = disabledFarm || (player.backpack.fertilizer_normal ?? 0) < 1;
+          bn.dataset.plotIdx = String(idx);
+          bn.dataset.fert = "normal";
+          bn.style.fontSize = "0.72rem";
+          const bg = document.createElement("button");
+          bg.type = "button";
+          bg.textContent = "金肥";
+          bg.disabled = disabledFarm || (player.backpack.fertilizer_golden ?? 0) < 1;
+          bg.dataset.plotIdx = String(idx);
+          bg.dataset.fert = "golden";
+          bg.style.fontSize = "0.72rem";
+          wrap.appendChild(bn);
+          wrap.appendChild(bg);
+          farmPlotsRow.appendChild(wrap);
+        });
+      }
+    }
+
+    if (merchantSeedsRow) {
+      merchantSeedsRow.innerHTML = "";
+      const seeds = config.commodities.filter((c) => c.type === "seed");
+      const disabledM = player.status === "failed" || player.status === "eliminated" || gameOver;
+      for (const s of seeds) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = `${s.name} ${s.seedPrice}金`;
+        btn.disabled = disabledM || (s.requiresGemBoard && !player.gemBoardUnlocked);
+        btn.dataset.seedBuyId = s.id;
+        btn.style.fontSize = "0.78rem";
+        merchantSeedsRow.appendChild(btn);
+      }
+    }
+
+    if (merchantFertRow) {
+      merchantFertRow.innerHTML = "";
+      const disabledM = player.status === "failed" || player.status === "eliminated" || gameOver;
+      for (const id of ["fertilizer_normal", "fertilizer_golden"]) {
+        const comm = config.commodities.find((c) => c.id === id);
+        if (!comm || !("price" in comm)) continue;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = `${comm.name} ${comm.price}金`;
+        btn.disabled = disabledM;
+        btn.dataset.fertBuyId = id;
+        btn.style.fontSize = "0.78rem";
+        merchantFertRow.appendChild(btn);
+      }
+    }
+
+    if (warehouseRow) {
+      warehouseRow.innerHTML = "";
+      const crops = config.commodities.filter((c) => c.type === "crop");
+      const disabledW = player.status === "failed" || player.status === "eliminated" || gameOver;
+      for (const c of crops) {
+        const w = player.warehouse?.[c.id] ?? 0;
+        if (w <= 0 && (player.backpack[c.id] ?? 0) <= 0) continue;
+        const span = document.createElement("span");
+        span.style.cssText = "display:inline-flex;gap:4px;align-items:center;";
+        span.innerHTML = `<span>${c.name} 仓${w} 背${player.backpack[c.id] ?? 0}</span>`;
+        const toW = document.createElement("button");
+        toW.type = "button";
+        toW.textContent = "→仓";
+        toW.disabled = disabledW || (player.backpack[c.id] ?? 0) < 1;
+        toW.dataset.whTo = c.id;
+        toW.style.fontSize = "0.72rem";
+        const fromW = document.createElement("button");
+        fromW.type = "button";
+        fromW.textContent = "出仓";
+        fromW.disabled = disabledW || w < 1;
+        fromW.dataset.whFrom = c.id;
+        fromW.style.fontSize = "0.72rem";
+        span.appendChild(toW);
+        span.appendChild(fromW);
+        warehouseRow.appendChild(span);
+      }
+      if (warehouseRow.innerHTML === "") {
+        warehouseRow.innerHTML = "<span style='opacity:0.7'>暂无库存</span>";
+      }
+    }
+
+    if (npcSelect && state.npcs?.length) {
+      npcSelect.innerHTML = "";
+      for (const n of state.npcs) {
+        const opt = document.createElement("option");
+        opt.value = n.id;
+        opt.textContent = `${n.name} (${n.archetype})`;
+        npcSelect.appendChild(opt);
+      }
+    }
+    if (npcCropSelect) {
+      npcCropSelect.innerHTML = "";
+      for (const c of config.commodities.filter((x) => x.type === "crop")) {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = c.name;
+        npcCropSelect.appendChild(opt);
+      }
+    }
+    if (gossipHint) {
+      gossipHint.textContent = state.lastGossip ? `上次打听：${state.lastGossip}` : "";
+    }
+
+    if (futuresPriceChart) {
+      const lines = [];
+      for (const c of futuresTradableCommodities(config)) {
+        const h = state.futuresPriceHistory[c.id] ?? [];
+        const pts = h.length ? h.map((x) => x.toFixed(1)).join(" → ") : "—";
+        lines.push(`${c.name}: ${pts}`);
+      }
+      futuresPriceChart.innerHTML = lines.join("<br>");
+    }
+
+    const uiLocked = gameOver || player.status === "failed" || player.status === "eliminated";
+    for (const bid of ["btnNpcBuy", "btnNpcSell", "btnNpcGossip"]) {
+      const b = viewGame.querySelector(`#${bid}`);
+      if (b instanceof HTMLButtonElement) b.disabled = uiLocked;
+    }
+    if (npcSelect) npcSelect.disabled = uiLocked;
+    if (npcCropSelect) npcCropSelect.disabled = uiLocked;
+    const npcQtyInputEl = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#npcQtyInput"));
+    if (npcQtyInputEl) npcQtyInputEl.disabled = uiLocked;
+    const repayIds = ["btnRepayDebt", "btnRepay5k", "btnRepay50k", "btnRepayAll"];
+    for (const rid of repayIds) {
+      const b = viewGame.querySelector(`#${rid}`);
+      if (b instanceof HTMLButtonElement) b.disabled = uiLocked;
+    }
+    const repayAmtEl = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#repayAmountInput"));
+    if (repayAmtEl) repayAmtEl.disabled = uiLocked;
+
     if (playerStatusDisplay) {
       if (gameOver) {
         playerStatusDisplay.textContent = "已结束";
@@ -233,6 +388,13 @@ export function mountApp(root, ctx) {
         backpackSeedsRow.appendChild(btn);
       }
     }
+    const backpackFertRow = viewGame.querySelector("#backpackFertRow");
+    if (backpackFertRow) {
+      const n = player.backpack.fertilizer_normal ?? 0;
+      const g = player.backpack.fertilizer_golden ?? 0;
+      backpackFertRow.innerHTML = `<span style="opacity:0.9">普通化肥 ×${n} · 金化肥 ×${g}</span>`;
+    }
+
     if (backpackCropsRow) {
       backpackCropsRow.innerHTML = "";
       const crops = config.commodities.filter((c) => c.type === "crop");
@@ -360,7 +522,10 @@ export function mountApp(root, ctx) {
 
     if (gameEndOverlay && gameEndRankList && gameEndSub) {
       if (gameOver && state.finalRanking && state.finalRanking.length && !endModalDismissed) {
-        gameEndSub.textContent = `第 ${totalGameDays} 天交割结算已完成，背包作物已按市价强制卖出（种子保留）。最终排名按现金：`;
+        gameEndSub.textContent =
+          state.endReason === "debt"
+            ? "债务已还清！终局排名按现金（未强制变卖背包）。"
+            : `第 ${totalGameDays} 天交割结算已完成，背包作物已按商店价强制卖出（种子保留）。最终排名按现金：`;
         const labels = state.playerLabels && typeof state.playerLabels === "object" ? state.playerLabels : {};
         gameEndRankList.innerHTML = state.finalRanking
           .map((r) => {
@@ -631,6 +796,124 @@ export function mountApp(root, ctx) {
   if (btnLoan10) {
     btnLoan10.addEventListener("click", () => {
       dispatch({ type: "TAKE_LOAN", tier: "10w" });
+      void renderGame();
+    });
+  }
+
+  const btnRepayDebt = viewGame.querySelector("#btnRepayDebt");
+  const btnRepay5k = viewGame.querySelector("#btnRepay5k");
+  const btnRepay50k = viewGame.querySelector("#btnRepay50k");
+  const btnRepayAll = viewGame.querySelector("#btnRepayAll");
+  const repayAmountInput = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#repayAmountInput"));
+
+  function dispatchRepay(amt) {
+    dispatch({ type: "REPAY_DEBT", amount: amt });
+    void renderGame();
+  }
+  if (btnRepayDebt && repayAmountInput) {
+    btnRepayDebt.addEventListener("click", () => {
+      const v = parseFloat(repayAmountInput.value);
+      if (isNaN(v) || v <= 0) return;
+      dispatchRepay(Math.floor(v));
+    });
+  }
+  if (btnRepay5k) {
+    btnRepay5k.addEventListener("click", () => dispatchRepay(5000));
+  }
+  if (btnRepay50k) {
+    btnRepay50k.addEventListener("click", () => dispatchRepay(50000));
+  }
+  if (btnRepayAll) {
+    btnRepayAll.addEventListener("click", () => {
+      const gs = getGameState();
+      const pl = getActivePlayer(gs);
+      dispatchRepay(pl.cash);
+    });
+  }
+
+  viewGame.addEventListener("click", (e) => {
+    const el = /** @type {HTMLElement | null} */ (e.target).closest("[data-plot-idx]");
+    if (el && el.dataset.plotIdx != null && el.dataset.fert) {
+      const plotIndex = parseInt(el.dataset.plotIdx, 10);
+      if (isNaN(plotIndex)) return;
+      const fertilizerKind = el.dataset.fert === "golden" ? "golden" : "normal";
+      dispatch({ type: "USE_FERTILIZER", plotIndex, fertilizerKind });
+      void renderGame();
+      return;
+    }
+    const seedBuy = /** @type {HTMLElement | null} */ (e.target).closest("[data-seed-buy-id]");
+    if (seedBuy && seedBuy.dataset.seedBuyId) {
+      const qty = promptQty("购买种子袋数", "1");
+      if (qty == null) return;
+      dispatch({ type: "BUY_SEED", seedId: seedBuy.dataset.seedBuyId, qty });
+      void renderGame();
+      return;
+    }
+    const fertBuy = /** @type {HTMLElement | null} */ (e.target).closest("[data-fert-buy-id]");
+    if (fertBuy && fertBuy.dataset.fertBuyId) {
+      const qty = promptQty("购买化肥数量", "1");
+      if (qty == null) return;
+      dispatch({ type: "BUY_FERTILIZER", fertilizerId: fertBuy.dataset.fertBuyId, qty });
+      void renderGame();
+      return;
+    }
+    const whTo = /** @type {HTMLElement | null} */ (e.target).closest("[data-wh-to]");
+    if (whTo && whTo.dataset.whTo) {
+      const cropId = whTo.dataset.whTo;
+      const qty = promptQty("移入仓库数量", "1");
+      if (qty == null) return;
+      dispatch({ type: "MOVE_TO_WAREHOUSE", commodityId: cropId, qty });
+      void renderGame();
+      return;
+    }
+    const whFrom = /** @type {HTMLElement | null} */ (e.target).closest("[data-wh-from]");
+    if (whFrom && whFrom.dataset.whFrom) {
+      const cropId = whFrom.dataset.whFrom;
+      const qty = promptQty("从仓库取回数量", "1");
+      if (qty == null) return;
+      dispatch({ type: "MOVE_FROM_WAREHOUSE", commodityId: cropId, qty });
+      void renderGame();
+    }
+  });
+
+  const btnNpcBuy = viewGame.querySelector("#btnNpcBuy");
+  const btnNpcSell = viewGame.querySelector("#btnNpcSell");
+  const btnNpcGossip = viewGame.querySelector("#btnNpcGossip");
+  if (btnNpcBuy && btnNpcSell && btnNpcGossip) {
+    btnNpcBuy.addEventListener("click", () => {
+      const npcSelectEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcSelect"));
+      const npcCropSelectEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcCropSelect"));
+      const npcQtyInput = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#npcQtyInput"));
+      if (!npcSelectEl || !npcCropSelectEl || !npcQtyInput) return;
+      const qty = parseInt(npcQtyInput.value, 10);
+      if (isNaN(qty) || qty < 1) return;
+      dispatch({
+        type: "NPC_BUY_SPOT",
+        npcId: npcSelectEl.value,
+        commodityId: npcCropSelectEl.value,
+        qty,
+      });
+      void renderGame();
+    });
+    btnNpcSell.addEventListener("click", () => {
+      const npcSelectEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcSelect"));
+      const npcCropSelectEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcCropSelect"));
+      const npcQtyInput = /** @type {HTMLInputElement | null} */ (viewGame.querySelector("#npcQtyInput"));
+      if (!npcSelectEl || !npcCropSelectEl || !npcQtyInput) return;
+      const qty = parseInt(npcQtyInput.value, 10);
+      if (isNaN(qty) || qty < 1) return;
+      dispatch({
+        type: "NPC_SELL_SPOT",
+        npcId: npcSelectEl.value,
+        commodityId: npcCropSelectEl.value,
+        qty,
+      });
+      void renderGame();
+    });
+    btnNpcGossip.addEventListener("click", () => {
+      const npcSelectEl = /** @type {HTMLSelectElement | null} */ (viewGame.querySelector("#npcSelect"));
+      if (!npcSelectEl) return;
+      dispatch({ type: "NPC_GOSSIP", npcId: npcSelectEl.value });
       void renderGame();
     });
   }

@@ -3,6 +3,96 @@ import { futuresFeeAmount } from "../core/rules/fees.js";
 import { buildSoloAiPlayerIds, totalMarginLockedForPlayer } from "../core/state.js";
 
 /**
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
+ * @param {string} playerId
+ */
+function getArchetypeForBot(state, playerId) {
+  if (state.soloWithAI) {
+    const soloIds = buildSoloAiPlayerIds(state.activePlayerId || "p1");
+    const idx = soloIds.indexOf(playerId);
+    if (idx >= 0) {
+      const types = /** @type {const} */ ([
+        "random",
+        "random",
+        "trend",
+        "trend",
+        "value",
+        "value",
+        "spot",
+        "spot",
+        "random",
+      ]);
+      return types[idx] ?? "random";
+    }
+  }
+  return "random";
+}
+
+/**
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
+ * @param {typeof import('../core/config.js').GAME_CONFIG} config
+ */
+function pickTrendTrade(state, config) {
+  const tradable = futuresTradableCommodities(config);
+  for (const comm of tradable) {
+    const h = state.futuresPriceHistory[comm.id] ?? [];
+    if (h.length < 3) continue;
+    const p0 = h[h.length - 3];
+    const p1 = h[h.length - 2];
+    const p2 = h[h.length - 1];
+    if (p0 < p1 && p1 < p2) return { comm, direction: /** @type {const} */ ("long") };
+    if (p0 > p1 && p1 > p2) return { comm, direction: /** @type {const} */ ("short") };
+  }
+  return null;
+}
+
+/**
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
+ * @param {typeof import('../core/config.js').GAME_CONFIG} config
+ */
+function pickValueTrade(state, config) {
+  const tradable = futuresTradableCommodities(config);
+  /** @type {{ comm: (typeof tradable)[number], direction: 'long'|'short' } | null} */
+  let best = null;
+  let bestAbs = 0;
+  for (const comm of tradable) {
+    const h = state.futuresPriceHistory[comm.id] ?? [];
+    if (h.length < 2) continue;
+    const arr = h.slice(-5);
+    const avg = arr.reduce((x, y) => x + y, 0) / arr.length;
+    const p = state.prices[comm.id];
+    if (!avg || avg <= 0) continue;
+    const dev = (p - avg) / avg;
+    if (Math.abs(dev) > bestAbs && Math.abs(dev) >= 0.05) {
+      bestAbs = Math.abs(dev);
+      best = { comm, direction: dev > 0 ? "short" : "long" };
+    }
+  }
+  return best;
+}
+
+/**
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
+ * @param {typeof import('../core/config.js').GAME_CONFIG} config
+ */
+function pickSpotTrade(state, config) {
+  const tradable = futuresTradableCommodities(config);
+  /** @type {{ comm: (typeof tradable)[number], direction: 'long'|'short' } | null} */
+  let best = null;
+  let bestAbs = 0;
+  for (const comm of tradable) {
+    const pool = state.spotPool[comm.id] ?? 0;
+    const snap = state.spotPoolSnapshot?.[comm.id] ?? pool;
+    const delta = pool - snap;
+    if (Math.abs(delta) > bestAbs) {
+      bestAbs = Math.abs(delta);
+      best = { comm, direction: delta > 0 ? "short" : "long" };
+    }
+  }
+  return best && bestAbs > 0 ? best : null;
+}
+
+/**
  * @param {unknown[]} array
  * @param {() => number} rng
  */
@@ -18,12 +108,12 @@ function shuffle(array, rng) {
 }
 
 /**
- * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
  * @param {string} playerId
  * @param {string} commodityId
  * @param {'long'|'short'} direction
  * @param {number} qty
- * @param {import('./config.js').GAME_CONFIG} config
+ * @param {import('../core/config.js').GAME_CONFIG} config
  */
 function wouldPassRisk(state, playerId, commodityId, direction, qty, config) {
   const player = state.players[playerId];
@@ -62,11 +152,11 @@ function wouldPassRisk(state, playerId, commodityId, direction, qty, config) {
 }
 
 /**
- * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
  * @param {string} playerId
- * @param {import('./config.js').GAME_CONFIG['commodities'][number]} comm
+ * @param {import('../core/config.js').GAME_CONFIG['commodities'][number]} comm
  * @param {'long'|'short'} direction
- * @param {import('./config.js').GAME_CONFIG} config
+ * @param {import('../core/config.js').GAME_CONFIG} config
  */
 function maxFeasibleOpenQty(state, playerId, comm, direction, config) {
   const { id, type } = comm;
@@ -101,8 +191,8 @@ function maxFeasibleOpenQty(state, playerId, comm, direction, config) {
 }
 
 /**
- * @param {ReturnType<import('./state.js').createInitialGameState>} state
- * @param {import('./config.js').GAME_CONFIG} config
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
+ * @param {import('../core/config.js').GAME_CONFIG} config
  * @param {{ openMarketPositionForPlayer: Function, closePositionForPlayer: Function }} api
  * @param {string[]} botPlayerIds
  */
@@ -139,26 +229,45 @@ export function runBotTurns(state, config, api, botPlayerIds) {
       closed[comm.id] = true;
     }
 
+    const archetype = getArchetypeForBot(state, aiId);
     const tradable = futuresTradableCommodities(config);
-    const remaining = new Set(tradable.map((c) => c.id));
-    while (remaining.size > 0) {
-      const pool = tradable.filter((c) => remaining.has(c.id));
-      if (pool.length === 0) break;
-      const pick = pool[Math.floor(rng() * pool.length)];
 
-      const direction = rng() < 0.5 ? "short" : "long";
-      const qty = maxFeasibleOpenQty(state, aiId, pick, direction, config);
+    /** @type {{ comm: (typeof tradable)[number], direction: 'long'|'short' } | null} */
+    let strategic = null;
+    if (archetype === "trend") strategic = pickTrendTrade(state, config);
+    else if (archetype === "value") strategic = pickValueTrade(state, config);
+    else if (archetype === "spot") strategic = pickSpotTrade(state, config);
+
+    let openedStrategic = false;
+    if (strategic) {
+      const qty = maxFeasibleOpenQty(state, aiId, strategic.comm, strategic.direction, config);
       if (qty >= 1) {
-        openMarketPositionForPlayer(state, aiId, pick.id, direction, qty, config, aiId);
+        openMarketPositionForPlayer(state, aiId, strategic.comm.id, strategic.direction, qty, config, aiId);
+        openedStrategic = true;
       }
-      remaining.delete(pick.id);
+    }
+
+    if (archetype === "random" || !openedStrategic) {
+      const remaining = new Set(tradable.map((c) => c.id));
+      while (remaining.size > 0) {
+        const pool = tradable.filter((c) => remaining.has(c.id));
+        if (pool.length === 0) break;
+        const pick = pool[Math.floor(rng() * pool.length)];
+
+        const direction = rng() < 0.5 ? "short" : "long";
+        const qty = maxFeasibleOpenQty(state, aiId, pick, direction, config);
+        if (qty >= 1) {
+          openMarketPositionForPlayer(state, aiId, pick.id, direction, qty, config, aiId);
+        }
+        remaining.delete(pick.id);
+      }
     }
   }
 }
 
 /**
- * @param {ReturnType<import('./state.js').createInitialGameState>} state
- * @param {import('./config.js').GAME_CONFIG} config
+ * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
+ * @param {import('../core/config.js').GAME_CONFIG} config
  * @param {{ openMarketPositionForPlayer: Function, closePositionForPlayer: Function }} api
  */
 export function runSoloAITurns(state, config, api) {

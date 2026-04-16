@@ -1,10 +1,13 @@
-import { futuresTradableCommodities, GAME_CONFIG } from "../config.js";
+import { cropCommodities, futuresTradableCommodities, GAME_CONFIG } from "../config.js";
 import { futuresFeeAmount } from "./fees.js";
 import {
   applyFuturesEndOfDay,
   chargeWeeklyInterestIfNeeded,
+  harvestOnePlot,
   progressFarmPlots,
   rollDailyEvents,
+  tickLongEvent,
+  tryRollLongEventOnNewWeek,
 } from "./marketDay.js";
 import { computeNextPriceFromDailyStats } from "./pricing.js";
 import { applySpotPriceFromPoolChange, merchantDailyBuyCap, shopBuyPrice, shopSellPrice } from "./spotMarket.js";
@@ -347,6 +350,53 @@ function forceEndGame(state, config) {
 }
 
 /**
+ * 债务还清胜利：按现金排名（不强制卖背包）
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {typeof GAME_CONFIG} config
+ */
+function endGameDebtVictory(state, config) {
+  const rows = Object.keys(state.players)
+    .map((playerId) => ({ playerId, cash: state.players[playerId].cash }))
+    .sort((a, b) => b.cash - a.cash);
+  state.finalRanking = rows;
+  state.gameEnded = true;
+  state.endReason = "debt";
+  pushLog(state, "🎉 债务还清！胜利！", config);
+}
+
+/**
+ * @param {ReturnType<import('./state.js').createInitialGameState>['players'][string]} pl
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {typeof GAME_CONFIG} config
+ * @param {number} minCash
+ */
+function forceSellBackpackCropsUntilCash(pl, state, config, minCash) {
+  const crops = config.commodities.filter((c) => c.type === "crop");
+  while (pl.cash < minCash) {
+    let progressed = false;
+    for (const c of crops) {
+      const q = Math.floor(pl.backpack[c.id] ?? 0);
+      if (q <= 0) continue;
+      const sp = state.spotPrices[c.id] ?? state.prices[c.id];
+      const px = shopSellPrice(sp, config);
+      const poolBefore = state.spotPool[c.id] ?? 0;
+      pl.backpack[c.id] = q - 1;
+      state.spotPool[c.id] = poolBefore + 1;
+      pl.cash += px;
+      applySpotPriceFromPoolChange(state, c.id, poolBefore, state.spotPool[c.id] ?? 0, config);
+      pushLog(
+        state,
+        `⚠️ 借贷逾期强卖 ${commodityName(config, c.id)} @ ${px.toFixed(2)}`,
+        config
+      );
+      progressed = true;
+      break;
+    }
+    if (!progressed) break;
+  }
+}
+
+/**
  * @param {ReturnType<import('./state.js').createInitialGameState>} state
  * @param {typeof GAME_CONFIG} config
  */
@@ -376,14 +426,17 @@ function nextDayInternal(state, config) {
       forceEndGame(state, config);
       return;
     }
+    tickLongEvent(state);
     state.currentDay = 1;
     state.globalDay += 1;
     syncWeekFields(state, config);
+    tryRollLongEventOnNewWeek(state, config);
     if (state.globalWeek >= 2) {
       chargeWeeklyInterestIfNeeded(state, config);
       pushLog(state, `📌 本周利息 ${config.economy.weeklyInterest} / 人`, config);
     }
     pushLog(state, "🌾 新周第1天。", config);
+    state.spotPoolSnapshot = { ...state.spotPool };
     return;
   }
 
@@ -395,6 +448,8 @@ function nextDayInternal(state, config) {
     checkOrdersMatch(state, config);
   }
   pushLog(state, `⏩ 进入第 ${state.currentDay} 天 (总第${state.globalDay}天)`, config);
+  tickLongEvent(state);
+  state.spotPoolSnapshot = { ...state.spotPool };
 }
 
 /**
@@ -825,6 +880,8 @@ function resetGame(state, config) {
   state.longEvent = null;
   state.eventFactorByCrop = {};
   state.futuresPriceHistory = {};
+  state.spotPriceHistory = {};
+  state.lastGossip = null;
   state.volumeHistory5d = {};
   for (const c of futuresTradableCommodities(config)) {
     state.volumeHistory5d[c.id] = [0, 0, 0, 0, 0];
@@ -928,6 +985,252 @@ function merchantBuySpot(state, cropId, qty, config) {
   pushLog(state, `🏪 商人购现货 ${commodityName(config, cropId)} ×${qty} @ ${px.toFixed(2)}`, config);
 }
 
+function buySeed(state, seedId, qty, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const comm = config.commodities.find((c) => c.id === seedId && c.type === "seed");
+  if (!comm || !("seedPrice" in comm)) {
+    pushLog(state, "❌ 无效种子", config);
+    return;
+  }
+  if ("requiresGemBoard" in comm && comm.requiresGemBoard && !pl.gemBoardUnlocked) {
+    pushLog(state, "❌ 需先开通创业板", config);
+    return;
+  }
+  qty = Math.floor(qty);
+  if (qty <= 0) return;
+  const total = comm.seedPrice * qty;
+  if (pl.cash < total) {
+    pushLog(state, "❌ 现金不足", config);
+    return;
+  }
+  pl.cash -= total;
+  pl.backpack[seedId] = (pl.backpack[seedId] ?? 0) + qty;
+  pushLog(state, `🛒 商人处购入 ${comm.name} ×${qty}（-${total}）`, config);
+}
+
+function buyFertilizer(state, fertilizerId, qty, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const comm = config.commodities.find((c) => c.id === fertilizerId && c.type === "fertilizer");
+  if (!comm || !("price" in comm)) {
+    pushLog(state, "❌ 无效化肥", config);
+    return;
+  }
+  qty = Math.floor(qty);
+  if (qty <= 0) return;
+  const total = comm.price * qty;
+  if (pl.cash < total) {
+    pushLog(state, "❌ 现金不足", config);
+    return;
+  }
+  pl.cash -= total;
+  pl.backpack[fertilizerId] = (pl.backpack[fertilizerId] ?? 0) + qty;
+  pushLog(state, `🛒 购入 ${comm.name} ×${qty}（-${total}）`, config);
+}
+
+/**
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {number} plotIndex 0-based
+ * @param {'normal'|'golden'} kind
+ * @param {typeof GAME_CONFIG} config
+ */
+function useFertilizer(state, plotIndex, kind, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const fid = kind === "golden" ? "fertilizer_golden" : "fertilizer_normal";
+  if ((pl.backpack[fid] ?? 0) < 1) {
+    pushLog(state, "❌ 化肥不足", config);
+    return;
+  }
+  const plots = pl.farmPlots;
+  if (!plots?.length || plotIndex < 0 || plotIndex >= plots.length) {
+    pushLog(state, "❌ 地块编号无效", config);
+    return;
+  }
+  const plot = plots[plotIndex];
+  pl.backpack[fid] -= 1;
+  if (kind === "golden") {
+    plots.splice(plotIndex, 1);
+    harvestOnePlot(plot, pl, config, 1);
+    pushLog(state, "✨ 金化肥：该地块立即收获", config);
+  } else {
+    if (plot.daysLeft <= 1) {
+      pl.backpack[fid] += 1;
+      pushLog(state, "❌ 普通化肥对还需≤1 天成熟的作物无效", config);
+      return;
+    }
+    plot.daysLeft -= 1;
+    pushLog(state, "🧪 普通化肥：成熟天数 -1", config);
+  }
+}
+
+function npcBuySpotFromNpc(state, npcId, cropId, qty, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const npc = state.npcs.find((n) => n.id === npcId);
+  if (!npc) {
+    pushLog(state, "❌ NPC 不存在", config);
+    return;
+  }
+  const crop = config.commodities.find((c) => c.id === cropId && c.type === "crop");
+  if (!crop) return;
+  qty = Math.floor(qty);
+  if (qty <= 0) return;
+  const npcStock = npc.stock[cropId] ?? 0;
+  const maxNpc = Math.floor(npcStock * 0.2);
+  if (maxNpc <= 0 || qty > maxNpc) {
+    pushLog(state, `❌ 超过 NPC 可售上限（≤库存20%，当前 ${maxNpc}）`, config);
+    return;
+  }
+  const sp = state.spotPrices[cropId] ?? state.prices[cropId];
+  const buyPx = shopBuyPrice(sp, config);
+  const px = Math.max(config.rules.minPrice, Math.round(buyPx * 0.9 * 100) / 100);
+  const total = px * qty;
+  if (pl.cash < total) {
+    pushLog(state, "❌ 现金不足", config);
+    return;
+  }
+  if (npcStock < qty) {
+    pushLog(state, "❌ NPC 库存不足", config);
+    return;
+  }
+  pl.cash -= total;
+  pl.backpack[cropId] = (pl.backpack[cropId] ?? 0) + qty;
+  npc.stock[cropId] = npcStock - qty;
+  npc.cash += total;
+  pushLog(state, `🤝 向 ${npc.name} 收购现货 ${commodityName(config, cropId)} ×${qty} @ ${px.toFixed(2)}（不影响池）`, config);
+}
+
+function npcSellToNpc(state, npcId, cropId, qty, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const npc = state.npcs.find((n) => n.id === npcId);
+  if (!npc) {
+    pushLog(state, "❌ NPC 不存在", config);
+    return;
+  }
+  const crop = config.commodities.find((c) => c.id === cropId && c.type === "crop");
+  if (!crop) return;
+  qty = Math.floor(qty);
+  if (qty <= 0) return;
+  if (qty > 10) {
+    pushLog(state, "❌ 单次最多向 NPC 出售 10", config);
+    return;
+  }
+  const have = pl.backpack[cropId] ?? 0;
+  if (have < qty) {
+    pushLog(state, "❌ 背包不足", config);
+    return;
+  }
+  const sp = state.spotPrices[cropId] ?? state.prices[cropId];
+  const sellPx = shopSellPrice(sp, config);
+  const px = Math.max(config.rules.minPrice, Math.round(sellPx * 0.9 * 100) / 100);
+  const total = px * qty;
+  if (npc.cash < total) {
+    pushLog(state, "❌ NPC 现金不足，拒绝收购", config);
+    return;
+  }
+  pl.backpack[cropId] = have - qty;
+  npc.stock[cropId] = (npc.stock[cropId] ?? 0) + qty;
+  npc.cash -= total;
+  pl.cash += total;
+  pushLog(state, `🤝 卖给 ${npc.name} ${commodityName(config, cropId)} ×${qty} @ ${px.toFixed(2)}（不影响池）`, config);
+}
+
+function npcGossip(state, npcId, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const npc = state.npcs.find((n) => n.id === npcId);
+  if (!npc) {
+    pushLog(state, "❌ NPC 不存在", config);
+    return;
+  }
+  const cost = 100;
+  if (pl.cash < cost) {
+    pushLog(state, "❌ 需要 100 金", config);
+    return;
+  }
+  pl.cash -= cost;
+  const crops = cropCommodities(config);
+  const pick = crops[Math.floor(Math.random() * crops.length)];
+  const hints = [
+    `传闻：${pick?.name ?? "?"} 近日期货事件因子可能偏 ${Math.random() < 0.5 ? "涨" : "跌"}`,
+    `风闻：有 NPC 近两日可能在盯 ${pick?.name ?? "某品种"}`,
+    `坊间：整体净头寸氛围偏 ${Math.random() < 0.5 ? "多" : "空"}（仅供参考）`,
+  ];
+  const msg = hints[Math.floor(Math.random() * hints.length)];
+  state.lastGossip = msg;
+  pushLog(state, `💬 ${npc.name}：${msg}`, config);
+}
+
+function moveToWarehouse(state, cropId, qty, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const crop = config.commodities.find((c) => c.id === cropId && c.type === "crop");
+  if (!crop) return;
+  qty = Math.floor(qty);
+  if (qty <= 0) return;
+  const have = pl.backpack[cropId] ?? 0;
+  if (have < qty) {
+    pushLog(state, "❌ 背包不足", config);
+    return;
+  }
+  pl.backpack[cropId] = have - qty;
+  if (!pl.warehouse) pl.warehouse = {};
+  pl.warehouse[cropId] = (pl.warehouse[cropId] ?? 0) + qty;
+  pushLog(state, `🏚️ 入库 ${commodityName(config, cropId)} ×${qty}`, config);
+}
+
+function moveFromWarehouse(state, cropId, qty, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") return;
+  const crop = config.commodities.find((c) => c.id === cropId && c.type === "crop");
+  if (!crop) return;
+  qty = Math.floor(qty);
+  if (qty <= 0) return;
+  const have = pl.warehouse?.[cropId] ?? 0;
+  if (have < qty) {
+    pushLog(state, "❌ 仓库不足", config);
+    return;
+  }
+  pl.warehouse[cropId] = have - qty;
+  pl.backpack[cropId] = (pl.backpack[cropId] ?? 0) + qty;
+  pushLog(state, `🏚️ 出库 ${commodityName(config, cropId)} ×${qty}`, config);
+}
+
 function takeLoan(state, tier, config) {
   const pl = getActivePlayer(state);
   const gw = state.globalWeek ?? 1;
@@ -952,6 +1255,9 @@ function takeLoan(state, tier, config) {
 }
 
 function processLoanDue(state, config) {
+  const penalty = config.economy.loanOverduePenaltyPerDay ?? 0.05;
+  const forceAfter = config.economy.loanForceSellAfterOverdueDays ?? 3;
+
   for (const pid of Object.keys(state.players)) {
     const pl = state.players[pid];
     if (!pl.loans?.length) continue;
@@ -961,23 +1267,64 @@ function processLoanDue(state, config) {
         kept.push(L);
         continue;
       }
-      if (pl.cash >= L.totalRepay) {
-        pl.cash -= L.totalRepay;
-        pushLog(state, `✅ 借贷已还 ${L.totalRepay}`, config);
-      } else {
-        const owed = L.totalRepay - pl.cash;
-        pl.cash = 0;
-        pushLog(state, `⚠️ 借贷未还清，尚欠 ${owed.toFixed(2)}（可次日处理）`, config);
-        kept.push({ ...L, totalRepay: owed });
+      let owed = L.totalRepay;
+      if (state.globalDay > L.dueGlobalDay) {
+        owed *= 1 + penalty;
+        if (state.globalDay > L.dueGlobalDay + forceAfter) {
+          forceSellBackpackCropsUntilCash(pl, state, config, owed);
+        }
       }
+      if (pl.cash >= owed) {
+        pl.cash -= owed;
+        pushLog(state, `✅ 借贷已还 ${owed.toFixed(2)}`, config);
+        continue;
+      }
+      const paid = pl.cash;
+      pl.cash = 0;
+      const remain = owed - paid;
+      kept.push({ ...L, totalRepay: remain });
+      pushLog(state, `⚠️ 借贷未还清，尚欠 ${remain.toFixed(2)}`, config);
     }
     pl.loans = kept;
   }
 }
 
 /**
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {number} amount
+ * @param {typeof GAME_CONFIG} config
+ */
+function repayDebt(state, amount, config) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const pl = getActivePlayer(state);
+  if (pl.status !== "playing") {
+    pushLog(state, "❌ 无法还债", config);
+    return;
+  }
+  if (amount <= 0 || !Number.isFinite(amount)) {
+    pushLog(state, "❌ 还债金额无效", config);
+    return;
+  }
+  amount = Math.floor(amount);
+  const pay = Math.min(pl.cash, amount, state.debt);
+  if (pay <= 0) {
+    pushLog(state, "❌ 现金或债务不足", config);
+    return;
+  }
+  pl.cash -= pay;
+  state.debt -= pay;
+  pushLog(state, `💳 还债 ${pay.toLocaleString()}，剩余债务 ${state.debt.toLocaleString()}`, config);
+  if (state.debt <= 0) {
+    endGameDebtVictory(state, config);
+  }
+}
+
+/**
  * @typedef {object} GameAction
- * @property {'RESET'|'NEXT_DAY'|'OPEN_MARKET'|'CLOSE'|'PLACE_LIMIT'|'CANCEL_ORDER'|'APPEND_LOG'|'USE_SEED'|'SELL_CROP_SPOT'|'UNLOCK_GEM_BOARD'|'UPGRADE_LAND'|'MERCHANT_BUY_SPOT'|'TAKE_LOAN'} type
+ * @property {'RESET'|'NEXT_DAY'|'OPEN_MARKET'|'CLOSE'|'PLACE_LIMIT'|'CANCEL_ORDER'|'APPEND_LOG'|'USE_SEED'|'SELL_CROP_SPOT'|'UNLOCK_GEM_BOARD'|'UPGRADE_LAND'|'MERCHANT_BUY_SPOT'|'TAKE_LOAN'|'REPAY_DEBT'|'BUY_SEED'|'BUY_FERTILIZER'|'USE_FERTILIZER'|'NPC_BUY_SPOT'|'NPC_SELL_SPOT'|'NPC_GOSSIP'|'MOVE_TO_WAREHOUSE'|'MOVE_FROM_WAREHOUSE'} type
  * @property {string} [commodityId]
  * @property {'long'|'short'} [direction]
  * @property {number} [qty]
@@ -986,6 +1333,11 @@ function processLoanDue(state, config) {
  * @property {string} [message]
  * @property {string} [seedId]
  * @property {'10w'|'50w'|'100w'} [tier]
+ * @property {number} [amount]
+ * @property {string} [fertilizerId]
+ * @property {number} [plotIndex]
+ * @property {'normal'|'golden'} [fertilizerKind]
+ * @property {string} [npcId]
  */
 
 /**
@@ -1044,6 +1396,45 @@ export function reduce(state, action, config = GAME_CONFIG) {
       break;
     case "TAKE_LOAN":
       takeLoan(state, action.tier ?? "10w", config);
+      break;
+    case "REPAY_DEBT":
+      if (action.amount != null) repayDebt(state, action.amount, config);
+      break;
+    case "BUY_SEED":
+      if (action.seedId != null && action.qty != null) buySeed(state, action.seedId, action.qty, config);
+      break;
+    case "BUY_FERTILIZER":
+      if (action.fertilizerId != null && action.qty != null) {
+        buyFertilizer(state, action.fertilizerId, action.qty, config);
+      }
+      break;
+    case "USE_FERTILIZER":
+      if (action.plotIndex != null && action.fertilizerKind != null) {
+        useFertilizer(state, action.plotIndex, action.fertilizerKind, config);
+      }
+      break;
+    case "NPC_BUY_SPOT":
+      if (action.npcId != null && action.commodityId != null && action.qty != null) {
+        npcBuySpotFromNpc(state, action.npcId, action.commodityId, action.qty, config);
+      }
+      break;
+    case "NPC_SELL_SPOT":
+      if (action.npcId != null && action.commodityId != null && action.qty != null) {
+        npcSellToNpc(state, action.npcId, action.commodityId, action.qty, config);
+      }
+      break;
+    case "NPC_GOSSIP":
+      if (action.npcId != null) npcGossip(state, action.npcId, config);
+      break;
+    case "MOVE_TO_WAREHOUSE":
+      if (action.commodityId != null && action.qty != null) {
+        moveToWarehouse(state, action.commodityId, action.qty, config);
+      }
+      break;
+    case "MOVE_FROM_WAREHOUSE":
+      if (action.commodityId != null && action.qty != null) {
+        moveFromWarehouse(state, action.commodityId, action.qty, config);
+      }
       break;
     default:
       break;

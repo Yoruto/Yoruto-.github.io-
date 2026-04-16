@@ -443,11 +443,58 @@
         </div>
 
         <div class="positions-area" style="margin-bottom: 1rem;">
+            <div class="section-title">💳 还债与胜利</div>
+            <p style="font-size:0.85rem;color:#e9c891;margin:0 0 0.5rem 0;line-height:1.45;">目标：偿还 <strong>200 万</strong> 初始债务；还清即终局胜利（按现金排名）。周息 3000 只从现金扣除，<strong>不会自动减少本金</strong>。</p>
+            <div class="backpack-row" style="gap:8px;align-items:center;">
+                <input type="number" id="repayAmountInput" min="1" step="1" placeholder="金额" style="width:110px;user-select:text;">
+                <button type="button" id="btnRepayDebt">还债</button>
+                <button type="button" id="btnRepay5k">还 5千</button>
+                <button type="button" id="btnRepay50k">还 5万</button>
+                <button type="button" id="btnRepayAll">全还</button>
+            </div>
+        </div>
+
+        <div class="positions-area" style="margin-bottom: 1rem;">
+            <div class="section-title">🌱 种植地块 &amp; 化肥</div>
+            <p style="font-size:0.8rem;color:#ac9e7e;margin:0 0 0.4rem 0;">普通肥：成熟天数&gt;1 时 -1 天；金肥：立即收获。背包需先有化肥。</p>
+            <div id="farmPlotsRow" class="backpack-row"></div>
+        </div>
+
+        <div class="positions-area" style="margin-bottom: 1rem;">
+            <div class="section-title">🏪 商人：种子 / 化肥</div>
+            <div class="backpack-subtitle">种子</div>
+            <div id="merchantSeedsRow" class="backpack-row"></div>
+            <div class="backpack-subtitle">化肥</div>
+            <div id="merchantFertRow" class="backpack-row"></div>
+        </div>
+
+        <div class="positions-area" style="margin-bottom: 1rem;">
+            <div class="section-title">🏚️ 仓库（仅存储）</div>
+            <div id="warehouseRow" class="backpack-row"></div>
+        </div>
+
+        <div class="positions-area" style="margin-bottom: 1rem;">
+            <div class="section-title">🏘️ NPC 现货（不影响公共池）</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px;">
+                <label for="npcSelect" style="font-size:0.85rem;">NPC</label>
+                <select id="npcSelect" style="background:#3e2c1d;color:#fef0cf;border-radius:30px;padding:6px 10px;max-width:180px;"></select>
+                <select id="npcCropSelect" style="background:#3e2c1d;color:#fef0cf;border-radius:30px;padding:6px 10px;"></select>
+                <input type="number" id="npcQtyInput" min="1" step="1" value="1" style="width:64px;user-select:text;">
+                <button type="button" id="btnNpcBuy">从NPC买</button>
+                <button type="button" id="btnNpcSell">卖给NPC</button>
+                <button type="button" id="btnNpcGossip">打听(100金)</button>
+            </div>
+            <div id="gossipHint" style="font-size:0.8rem;color:#c9b896;"></div>
+        </div>
+
+        <div class="positions-area" style="margin-bottom: 1rem;">
             <div class="section-title">🎒 我的背包</div>
             <div class="backpack-subtitle">种子（点击使用，转化为背包内作物现货）</div>
             <div id="backpackSeedsRow" class="backpack-row"></div>
             <div class="backpack-subtitle">作物现货（交割可用；点击按现价卖出，现金入账，等量回到公共现货池）</div>
             <div id="backpackCropsRow" class="backpack-row"></div>
+            <div class="backpack-subtitle">化肥（在「种植地块」上对地块使用）</div>
+            <div id="backpackFertRow" class="backpack-row"></div>
         </div>
 
         <table class="market-table" id="marketTable">
@@ -456,6 +503,11 @@
             </thead>
             <tbody id="marketTbody"></tbody>
         </table>
+
+        <div class="positions-area">
+            <div class="section-title">📈 期货近 7 日收盘</div>
+            <div id="futuresPriceChart" style="font-size:0.78rem;font-family:monospace;line-height:1.45;color:#e9dcc3;"></div>
+        </div>
 
         <div class="positions-area">
             <div class="section-title">📋 当前持仓明细 (多/空)</div>

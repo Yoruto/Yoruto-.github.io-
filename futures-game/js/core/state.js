@@ -286,9 +286,13 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     volumeHistory5d: buildEmptyVolumeHistory(config),
     /** 期货价历史（最近 7 日收盘，每作物） */
     futuresPriceHistory: /** @type {Record<string, number[]>} */ ({}),
+    /** 现货价历史（最近 7 日，每作物，UI 走势） */
+    spotPriceHistory: /** @type {Record<string, number[]>} */ ({}),
     /** 上一日现货池快照（用于计算因子） */
     spotPoolSnapshot: { ...buildInitialSpotPool(config) },
     totalGameDays: totalDays,
+    /** NPC 打听消息最近一条（展示用） */
+    lastGossip: /** @type {string | null} */ (null),
   };
 }
 

@@ -29,6 +29,8 @@ export const GAME_CONFIG = {
     { id: "pumpkin_seed", name: "南瓜种子", type: "seed", yieldsCropId: "pumpkin", growDays: 2, seedPrice: 20, yieldMin: 1, yieldMax: 4, requiresGemBoard: true },
     { id: "strawberry_seed", name: "草莓种子", type: "seed", yieldsCropId: "strawberry", growDays: 3, seedPrice: 50, yieldMin: 1, yieldMax: 4, requiresGemBoard: true },
     { id: "watermelon_seed", name: "西瓜种子", type: "seed", yieldsCropId: "watermelon", growDays: 4, seedPrice: 150, yieldMin: 2, yieldMax: 5, requiresGemBoard: true },
+    { id: "fertilizer_normal", name: "普通化肥", type: "fertilizer", price: 100 },
+    { id: "fertilizer_golden", name: "金化肥", type: "fertilizer", price: 1000 },
     // 作物：contractMultiplier 为文档期货「刻度」；initialSpot 现货池初始量
     { id: "corn", name: "玉米", type: "crop", initialSpot: 1000, futuresTradable: true, contractMultiplier: 10, requiresGemBoard: false },
     { id: "apple", name: "苹果", type: "crop", initialSpot: 1000, futuresTradable: true, contractMultiplier: 20, requiresGemBoard: false },
@@ -86,6 +88,10 @@ export const GAME_CONFIG = {
     volumeSmoothing: 100,
     /** 现货池变动 → 价格因子系数 */
     spotPoolPriceFactor: 0.1,
+    /** 借贷逾期：每日罚息（未还余额） */
+    loanOverduePenaltyPerDay: 0.05,
+    /** 逾期超过该天数后强制卖背包作物还债 */
+    loanForceSellAfterOverdueDays: 3,
   },
   rules: {
     maxLogEntries: 80,
