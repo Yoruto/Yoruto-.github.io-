@@ -1,8 +1,65 @@
 import { futuresTradableCommodities } from "../config.js";
-import { computeEquity } from "../logic.js";
+import { computeEquity, maxOpenMarketQty } from "../logic.js";
 import { DEFAULT_PLAYER_ID, getActivePlayer, normalizePlayerId } from "../state.js";
 
 const PLAYER_ID_STORAGE_KEY = "futures-game:playerId";
+
+/**
+ * 相对上一日收盘涨跌幅（至少 2 个历史收盘点；与 futuresPriceHistory 一致）
+ * @param {number[]} h oldest..newest
+ * @param {number} currentPrice
+ */
+function futuresDayOverDayChange(h, currentPrice) {
+  if (!h || h.length < 2) {
+    return { text: "—", cls: "chg-neutral" };
+  }
+  const prevClose = h[h.length - 2];
+  if (!(prevClose > 0)) {
+    return { text: "—", cls: "chg-neutral" };
+  }
+  const pct = ((currentPrice - prevClose) / prevClose) * 100;
+  const cls = pct > 0 ? "chg-up" : pct < 0 ? "chg-down" : "chg-neutral";
+  const sign = pct > 0 ? "+" : "";
+  return { text: `${sign}${pct.toFixed(2)}%`, cls };
+}
+
+/**
+ * 日终相邻收盘之间的红绿柱（柱高为窗口内归一化振幅）
+ * @param {number[]} h oldest..newest
+ * @returns {string}
+ */
+function buildFuturesMiniChartHtml(h) {
+  if (!h || h.length < 2) {
+    return '<span class="chg-neutral">数据不足（至少经过 2 次日终收盘）</span>';
+  }
+  /** @type {{ up: boolean, absRatio: number, title: string }[]} */
+  const deltas = [];
+  let maxAbsPct = 0;
+  for (let k = 0; k < h.length - 1; k++) {
+    const a = h[k];
+    const b = h[k + 1];
+    if (!(a > 0)) continue;
+    const signedPct = ((b - a) / a) * 100;
+    const absRatio = Math.abs((b - a) / a);
+    deltas.push({
+      up: b >= a,
+      absRatio,
+      title: `${signedPct >= 0 ? "+" : ""}${signedPct.toFixed(2)}%`,
+    });
+    if (absRatio > maxAbsPct) maxAbsPct = absRatio;
+  }
+  if (deltas.length === 0) {
+    return '<span class="chg-neutral">—</span>';
+  }
+  if (maxAbsPct < 1e-12) maxAbsPct = 1e-12;
+  const maxH = 40;
+  const parts = deltas.map((d) => {
+    const hPx = Math.max(4, Math.round((d.absRatio / maxAbsPct) * maxH));
+    const barCls = d.up ? "futures-bar futures-bar-up" : "futures-bar futures-bar-down";
+    return `<span class="${barCls}" style="height:${hPx}px" title="${d.title}"></span>`;
+  });
+  return `<div class="futures-mini-chart">${parts.join("")}</div>`;
+}
 
 /**
  * @param {HTMLElement} root
@@ -335,13 +392,14 @@ export function mountApp(root, ctx) {
     }
 
     if (futuresPriceChart) {
-      const lines = [];
+      const blocks = [];
       for (const c of futuresTradableCommodities(config)) {
         const h = state.futuresPriceHistory[c.id] ?? [];
-        const pts = h.length ? h.map((x) => x.toFixed(1)).join(" → ") : "—";
-        lines.push(`${c.name}: ${pts}`);
+        blocks.push(
+          `<div class="futures-chart-block"><span class="futures-chart-label">${c.name}</span>${buildFuturesMiniChartHtml(h)}</div>`
+        );
       }
-      futuresPriceChart.innerHTML = lines.join("<br>");
+      futuresPriceChart.innerHTML = blocks.join("");
     }
 
     const uiLocked = gameOver || player.status === "failed" || player.status === "eliminated";
@@ -425,6 +483,8 @@ export function mountApp(root, ctx) {
       for (const comm of futuresTradableCommodities(config)) {
         const id = comm.id;
         const price = state.prices[id];
+        const hist = state.futuresPriceHistory[id] ?? [];
+        const chg = futuresDayOverDayChange(hist, price);
         const pos = player.positions[id];
         const longQty = pos.long.qty;
         const shortQty = pos.short.qty;
@@ -436,6 +496,7 @@ export function mountApp(root, ctx) {
         tr.innerHTML = `
                 <td class="commodity-name">${comm.name}</td>
                 <td class="price">${price.toFixed(2)}</td>
+                <td class="${chg.cls}">${chg.text}</td>
                 <td>${longQty > 0 ? longQty + " (均价:" + pos.long.avgPrice.toFixed(2) + ")" : "—"}</td>
                 <td>${shortQty > 0 ? shortQty + " (均价:" + pos.short.avgPrice.toFixed(2) + ")" : "—"}</td>
                 <td ${plColor}>${floatPL >= 0 ? "+" + floatPL.toFixed(2) : floatPL.toFixed(2)}</td>
@@ -729,12 +790,11 @@ export function mountApp(root, ctx) {
         const dir = action === "market-long" ? "long" : "short";
         const gs = getGameState();
         const pl = getActivePlayer(gs);
-        const px = gs.prices[commodityId] ?? 0;
-        const mr = config.rules.marginRate;
+        const pid = gs.activePlayerId || DEFAULT_PLAYER_ID;
         const maxHands =
-          pl.status !== "failed" && px > 0 && pl.cash > 0 ? Math.floor(pl.cash / (mr * px)) : 0;
+          pl.status !== "failed" ? maxOpenMarketQty(gs, pid, commodityId, dir, config) : 0;
         const qty = promptQty(
-          `输入开仓数量 (${dir === "long" ? "做多" : "做空"} 数量)，最大可开 ${maxHands} 手`,
+          `输入开仓数量 (${dir === "long" ? "做多" : "做空"} 数量)，最大可开 ${maxHands} 手（已按保证金+手续费与做空上限估算）`,
           maxHands > 0 ? String(maxHands) : "1"
         );
         if (qty == null) return;

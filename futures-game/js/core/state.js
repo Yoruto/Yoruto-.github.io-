@@ -97,8 +97,9 @@ export function buildInitialSpotPool(config = GAME_CONFIG) {
 
 /**
  * @param {typeof GAME_CONFIG} config
+ * @param {{ gemBoardUnlocked?: boolean }} [options] AI/电脑对手可默认 true，与《游戏设计》NPC 策略一致
  */
-export function createPlayerState(config = GAME_CONFIG) {
+export function createPlayerState(config = GAME_CONFIG, options = {}) {
   const backpack = buildEmptyBackpack(config.commodities);
   const seed0 = config.initial.backpack;
   if (seed0 && typeof seed0 === "object") {
@@ -115,7 +116,7 @@ export function createPlayerState(config = GAME_CONFIG) {
     status: /** @type {'playing' | 'failed' | 'eliminated'} */ ("playing"),
     pendingOrders: /** @type {object[]} */ ([]),
     landLevel: 0,
-    gemBoardUnlocked: false,
+    gemBoardUnlocked: options.gemBoardUnlocked ?? false,
     /** 纯存储，与背包可同步扩展 */
     warehouse: /** @type {Record<string, number>} */ ({}),
     /** 种植地块 */
@@ -162,6 +163,7 @@ function buildEmptyVolumeHistory(config) {
  *   archetype: 'random'|'trend'|'value'|'spot',
  *   cash: number,
  *   stock: Record<string, number>,
+ *   gemBoardUnlocked: boolean,
  * }} NpcState
  */
 
@@ -183,6 +185,7 @@ export function createDefaultNpcs(config) {
       archetype: archetypes[i] ?? "random",
       cash: 100000,
       stock,
+      gemBoardUnlocked: true,
     });
   }
   return npcs;
@@ -219,13 +222,13 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     }
     botPlayerIds = buildMultiplayerBotIds(humanPlayerIds);
     for (const bid of botPlayerIds) {
-      players[bid] = createPlayerState(config);
+      players[bid] = createPlayerState(config, { gemBoardUnlocked: true });
     }
   } else {
     players[id] = createPlayerState(config);
     if (soloWithAI) {
       for (const aid of buildSoloAiPlayerIds(id)) {
-        players[aid] = createPlayerState(config);
+        players[aid] = createPlayerState(config, { gemBoardUnlocked: true });
       }
     }
     humanPlayerIds = [];

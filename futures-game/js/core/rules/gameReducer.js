@@ -898,14 +898,14 @@ function resetGame(state, config) {
       players[hid] = createPlayerState(config);
     }
     for (const bid of bots) {
-      players[bid] = createPlayerState(config);
+      players[bid] = createPlayerState(config, { gemBoardUnlocked: true });
     }
     state.players = players;
   } else if (state.soloWithAI) {
     /** @type {Record<string, ReturnType<createPlayerState>>} */
     const players = { [pid]: createPlayerState(config) };
     for (const aid of buildSoloAiPlayerIds(pid)) {
-      players[aid] = createPlayerState(config);
+      players[aid] = createPlayerState(config, { gemBoardUnlocked: true });
     }
     state.players = players;
   } else {
