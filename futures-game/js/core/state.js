@@ -290,6 +290,9 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     longEventChance: 0.25,
     /** 长事件状态 */
     longEvent: /** @type {null | { kind: string, daysLeft: number, payload?: object }} */ (null),
+    /** 待展示的一次性事件弹窗（由 UI 读后 dispatch DISMISS_EVENT_MODAL 清空） */
+    pendingEventModal:
+      /** @type {null | { variant: 'daily' | 'long_start' | 'long_end', title: string, body?: string }} */ (null),
     /** 当日各作物事件因子（-0.05~0.05） */
     eventFactorByCrop: /** @type {Record<string, number>} */ ({}),
     /** 5 日滚动成交量（每作物 5 槽） */

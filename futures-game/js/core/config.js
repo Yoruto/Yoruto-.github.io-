@@ -96,6 +96,8 @@ export const GAME_CONFIG = {
   rules: {
     maxLogEntries: 80,
     riskMinEquity: -5000,
+    /** 单机模式对手 AI（p2–p10）开仓后预计权益下限，严于 riskMinEquity，减轻爆仓 */
+    soloAiRiskMinEquity: 0,
     minPrice: 0.5,
     minMoveRatio: 0.001,
     limitMoveRatio: 0.2,

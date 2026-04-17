@@ -1,6 +1,14 @@
 import { futuresTradableCommodities } from "../core/config.js";
 import { futuresFeeAmount } from "../core/rules/fees.js";
+import { getEffectiveRiskMinEquity } from "../core/rules/riskEquity.js";
 import { buildSoloAiPlayerIds, totalMarginLockedForPlayer } from "../core/state.js";
+
+/** rng 大于等于该值则跳过平仓尝试（提高平仓意愿则增大此值） */
+const BOT_CLOSE_SKIP_THRESHOLD = 0.45;
+/** random  archetype 补位开仓每日最多尝试次数 */
+const BOT_MAX_FILL_OPENS_RANDOM = 2;
+/** 其它 archetype 补位开仓每日最多尝试次数 */
+const BOT_MAX_FILL_OPENS_OTHER = 3;
 
 /**
  * @param {ReturnType<import('../core/state.js').createInitialGameState>} state
@@ -148,7 +156,7 @@ function wouldPassRisk(state, playerId, commodityId, direction, qty, config) {
   }
   const newEquity =
     player.cash - marginAdd - fee + totalMarginLockedForPlayer({ positions: tempPos }, config.commodities) + newFloating;
-  return newEquity >= config.rules.riskMinEquity;
+  return newEquity >= getEffectiveRiskMinEquity(state, config, playerId);
 }
 
 /**
@@ -214,7 +222,7 @@ export function runBotTurns(state, config, api, botPlayerIds) {
       const longQty = player.positions[comm.id].long.qty;
       const shortQty = player.positions[comm.id].short.qty;
       if (longQty === 0 && shortQty === 0) continue;
-      if (rng() >= 0.35) continue;
+      if (rng() >= BOT_CLOSE_SKIP_THRESHOLD) continue;
       /** @type {'long'|'short'} */
       let dir;
       if (longQty > 0 && shortQty > 0) {
@@ -248,8 +256,11 @@ export function runBotTurns(state, config, api, botPlayerIds) {
     }
 
     if (archetype === "random" || !openedStrategic) {
+      const maxFillOpens = archetype === "random" ? BOT_MAX_FILL_OPENS_RANDOM : BOT_MAX_FILL_OPENS_OTHER;
       const remaining = new Set(tradable.map((c) => c.id));
-      while (remaining.size > 0) {
+      let fillAttempts = 0;
+      while (remaining.size > 0 && fillAttempts < maxFillOpens) {
+        fillAttempts += 1;
         const pool = tradable.filter((c) => remaining.has(c.id));
         if (pool.length === 0) break;
         const pick = pool[Math.floor(rng() * pool.length)];

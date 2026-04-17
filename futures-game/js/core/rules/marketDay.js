@@ -130,16 +130,51 @@ export function pushLogLine(state, msg, config) {
   state.logEntries = next;
 }
 
+const LONG_EVENT_KIND_LABELS = {
+  good_weather: "好天气",
+  fee_down: "手续费下调",
+  bad_weather: "坏天气",
+  fee_up: "手续费上调",
+  blizzard: "暴雪",
+  broad_rise: "普涨",
+  broad_fall: "普跌",
+};
+
+/**
+ * @param {string} kind
+ * @returns {string}
+ */
+export function longEventKindLabel(kind) {
+  return LONG_EVENT_KIND_LABELS[kind] ?? kind;
+}
+
+/**
+ * @param {import('../state.js').ReturnType<import('../state.js').createInitialGameState>} state
+ * @param {string} body
+ */
+function setDailyEventPopup(state, body) {
+  state.pendingEventModal = { variant: "daily", title: "每日事件", body };
+}
+
 /**
  * 长事件：每日结束时减天数
  * @param {import('../state.js').ReturnType<import('../state.js').createInitialGameState>} state
+ * @param {typeof import('../config.js').GAME_CONFIG} config
  */
-export function tickLongEvent(state) {
+export function tickLongEvent(state, config) {
   const le = state.longEvent;
   if (!le || le.daysLeft == null) return;
   le.daysLeft -= 1;
   if (le.daysLeft <= 0) {
+    const endedKind = le.kind;
+    const label = longEventKindLabel(endedKind);
     state.longEvent = null;
+    state.pendingEventModal = {
+      variant: "long_end",
+      title: "长事件已结束",
+      body: `「${label}」已结束。`,
+    };
+    pushLogLine(state, `🌤️ 长事件结束: ${label}`, config);
   }
 }
 
@@ -185,7 +220,13 @@ export function tryRollLongEventOnNewWeek(state, config) {
     }
     state.longEvent = { kind, daysLeft, payload: {} };
     state.longEventChance = 0.25;
-    pushLogLine(state, `🌤️ 长事件开始: ${kind}（${daysLeft} 天），本日不触发普通日事件`, config);
+    const label = longEventKindLabel(kind);
+    pushLogLine(state, `🌤️ 长事件开始: ${label}（${daysLeft} 天），本日不触发普通日事件`, config);
+    state.pendingEventModal = {
+      variant: "long_start",
+      title: "长事件开始",
+      body: `${label} · 持续 ${daysLeft} 天（本日不触发普通日事件）`,
+    };
   } else {
     state.longEventChance = Math.min(1, p + 0.25);
   }
@@ -249,6 +290,7 @@ export function rollDailyEvents(state, config) {
         const pl = state.players[state.activePlayerId || "p1"];
         if (pl) pl.backpack[s.id] = (pl.backpack[s.id] ?? 0) + 1;
         pushLogLine(state, "📦 社区赠送：种子 +1", config);
+        setDailyEventPopup(state, "社区赠送：种子 +1");
       }
     } else {
       const pick = pickRandomCrop();
@@ -256,6 +298,7 @@ export function rollDailyEvents(state, config) {
         const pl = state.players[state.activePlayerId || "p1"];
         if (pl) pl.backpack[pick.id] = (pl.backpack[pick.id] ?? 0) + 3;
         pushLogLine(state, `🌾 大丰收：${pick.name} +3`, config);
+        setDailyEventPopup(state, `大丰收：${pick.name} +3`);
       }
     }
   } else if (r < 0.6) {
@@ -265,6 +308,7 @@ export function rollDailyEvents(state, config) {
       if (pick) {
         state.eventFactorByCrop[pick.id] = -0.03;
         pushLogLine(state, `🐛 生长不良：${pick.name} 市场承压`, config);
+        setDailyEventPopup(state, `生长不良：${pick.name} 市场承压`);
       }
     } else if (sub < 0.75) {
       const pl = state.players[state.activePlayerId || "p1"];
@@ -276,6 +320,7 @@ export function rollDailyEvents(state, config) {
             const steal = Math.min(w, Math.max(1, Math.floor(w * 0.1)));
             pl.warehouse[id] = w - steal;
             pushLogLine(state, `🥷 仓库失窃：${id} -${steal}`, config);
+            setDailyEventPopup(state, `仓库失窃：${id} -${steal}`);
             break;
           }
         }
@@ -285,24 +330,28 @@ export function rollDailyEvents(state, config) {
       if (pick) {
         state.eventFactorByCrop[pick.id] = -0.05;
         pushLogLine(state, `💀 颗粒无收预期：${pick.name}`, config);
+        setDailyEventPopup(state, `颗粒无收预期：${pick.name}`);
       }
     }
   } else {
     const sub = Math.random();
     if (sub < 0.3) {
       pushLogLine(state, "🏪 商店传闻：今日可留意金化肥/松露（占位）", config);
+      setDailyEventPopup(state, "商店传闻：今日可留意金化肥/松露（占位）");
     } else if (sub < 0.8) {
       const pick = pickRandomCrop();
       if (pick) {
         const f = (Math.random() * 0.1 - 0.05) * 1.5;
         state.eventFactorByCrop[pick.id] = Math.max(-0.05, Math.min(0.05, f));
         pushLogLine(state, `📈📉 单品种波动：${pick.name}`, config);
+        setDailyEventPopup(state, `单品种波动：${pick.name}`);
       }
     } else {
       const pick = pickRandomCrop();
       if (pick) {
         state.eventFactorByCrop[pick.id] = Math.random() < 0.5 ? 0.1 : -0.1;
         pushLogLine(state, `🎯 涨跌停传闻：${pick.name}`, config);
+        setDailyEventPopup(state, `涨跌停传闻：${pick.name}`);
       }
     }
   }

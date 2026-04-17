@@ -113,6 +113,11 @@ export function mountApp(root, ctx) {
   const gameEndRankList = root.querySelector("#gameEndRankList");
   const gameEndSub = root.querySelector("#gameEndSub");
   const gameEndCloseBtn = root.querySelector("#gameEndCloseBtn");
+  const eventModalOverlay = root.querySelector("#eventModalOverlay");
+  const eventModalEl = root.querySelector("#eventModal");
+  const eventModalTitle = root.querySelector("#eventModalTitle");
+  const eventModalBody = root.querySelector("#eventModalBody");
+  const eventModalCloseBtn = root.querySelector("#eventModalCloseBtn");
 
   /** 用户关闭终局排名弹窗后，不再在每次 render 时强制弹出 */
   let endModalDismissed = false;
@@ -236,6 +241,22 @@ export function mountApp(root, ctx) {
     const debtDisplay = viewGame.querySelector("#debtDisplay");
     if (weekDisplay) weekDisplay.textContent = String(state.globalWeek ?? 1);
     if (debtDisplay) debtDisplay.textContent = (state.debt ?? 0).toLocaleString();
+
+    const btnGemBoardEl = viewGame.querySelector("#btnGemBoard");
+    if (btnGemBoardEl instanceof HTMLButtonElement) {
+      const gemCost = config.economy.gemBoardCost;
+      const gemWan = gemCost >= 10000 ? `${gemCost / 10000}万` : String(gemCost);
+      if (player.gemBoardUnlocked) {
+        btnGemBoardEl.disabled = true;
+        btnGemBoardEl.textContent = "✅ 已开通创业板";
+        btnGemBoardEl.removeAttribute("title");
+      } else {
+        const canPay = player.cash >= gemCost;
+        btnGemBoardEl.disabled = gameOver || player.status !== "playing" || !canPay;
+        btnGemBoardEl.textContent = `创业板 ${gemWan}`;
+        btnGemBoardEl.title = canPay ? `支付 ${gemCost.toLocaleString()} 现金开通` : `现金不足，需 ${gemCost.toLocaleString()}`;
+      }
+    }
 
     const farmPlotsRow = viewGame.querySelector("#farmPlotsRow");
     const merchantSeedsRow = viewGame.querySelector("#merchantSeedsRow");
@@ -605,6 +626,22 @@ export function mountApp(root, ctx) {
         gameEndOverlay.setAttribute("aria-hidden", "true");
       }
     }
+
+    if (eventModalOverlay && eventModalTitle && eventModalBody && eventModalEl) {
+      const pending = state.pendingEventModal;
+      if (!gameOver && pending) {
+        eventModalTitle.textContent = pending.title;
+        const body = pending.body != null && String(pending.body).trim() !== "" ? String(pending.body) : "";
+        eventModalBody.textContent = body;
+        eventModalBody.classList.toggle("hidden", !body);
+        eventModalEl.setAttribute("data-variant", pending.variant);
+        eventModalOverlay.classList.remove("hidden");
+        eventModalOverlay.setAttribute("aria-hidden", "false");
+      } else {
+        eventModalOverlay.classList.add("hidden");
+        eventModalOverlay.setAttribute("aria-hidden", "true");
+      }
+    }
   }
 
   function escapeHtml(s) {
@@ -839,6 +876,21 @@ export function mountApp(root, ctx) {
       endModalDismissed = true;
       gameEndOverlay.classList.add("hidden");
       gameEndOverlay.setAttribute("aria-hidden", "true");
+    });
+  }
+
+  if (eventModalCloseBtn) {
+    eventModalCloseBtn.addEventListener("click", () => {
+      dispatch({ type: "DISMISS_EVENT_MODAL" });
+      void renderGame();
+    });
+  }
+  if (eventModalOverlay) {
+    eventModalOverlay.addEventListener("click", (e) => {
+      if (e.target === eventModalOverlay) {
+        dispatch({ type: "DISMISS_EVENT_MODAL" });
+        void renderGame();
+      }
     });
   }
 

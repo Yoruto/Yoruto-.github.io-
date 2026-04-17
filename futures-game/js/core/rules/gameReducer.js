@@ -25,6 +25,7 @@ import {
   totalMarginLockedForPlayer,
 } from "../state.js";
 import { generateWorldNpcDailyPlans, wouldPassRiskForNpc } from "../../ai/worldNpcFutures.js";
+import { getEffectiveRiskMinEquity } from "./riskEquity.js";
 
 /**
  * @param {ReturnType<import('./state.js').createInitialGameState>} state
@@ -75,6 +76,37 @@ function pushLog(state, msg, config = GAME_CONFIG) {
 
 function commodityName(config, id) {
   return config.commodities.find((c) => c.id === id)?.name ?? id;
+}
+
+/**
+ * 玩家做空开仓规则（与 maxOpenQty 一致）。markPrice 为期市现价；限价成交时用当日市价。
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {ReturnType<import('../state.js').createPlayerState>} player
+ * @param {string} commodityId
+ * @param {number} qty
+ * @param {number} markPrice
+ * @param {typeof GAME_CONFIG} config
+ * @returns {string | null} 错误文案，null 表示通过
+ */
+function validatePlayerShortOpen(state, player, commodityId, qty, markPrice, config) {
+  const comm = config.commodities.find((c) => c.id === commodityId);
+  if (!comm || comm.type !== "crop") return "无效品种";
+  if (comm.requiresGemBoard) {
+    if (!player.gemBoardUnlocked) return "需先开通创业板";
+    let invVal = 0;
+    for (const c of config.commodities.filter((x) => x.type === "crop")) {
+      invVal += (player.backpack[c.id] ?? 0) * (state.spotPrices[c.id] ?? 0);
+    }
+    const cap = (player.cash + invVal) * config.rules.shortNotionalCapRatio;
+    const curShort = player.positions[commodityId].short.qty * markPrice;
+    if (curShort + qty * markPrice > cap + 1e-6) return "超出做空名义上限";
+  } else {
+    const spot = state.spotPool[commodityId] ?? 0;
+    const cap = Math.floor(0.2 * spot);
+    const cur = player.positions[commodityId].short.qty;
+    if (qty + cur > cap) return "超出公共池20%卖空上限";
+  }
+  return null;
 }
 
 /**
@@ -131,11 +163,23 @@ function checkOrdersMatch(state, config) {
         continue;
       }
       const name = comm ? comm.name : order.commodityId;
+      if (comm.requiresGemBoard && !player.gemBoardUnlocked) {
+        pushLog(state, `❌ 挂单无法成交: ${name} 需先开通创业板`, config);
+        continue;
+      }
       const marginAdd = config.rules.marginRate * order.price * order.quantity;
-      if (player.cash < marginAdd) {
+      const fee = futuresFeeAmount(order.price * order.quantity, config, state.feePermanentDelta);
+      if (order.type === "short") {
+        const err = validatePlayerShortOpen(state, player, order.commodityId, order.quantity, currentPrice, config);
+        if (err) {
+          pushLog(state, `❌ 挂单无法成交: ${name} ${err}`, config);
+          continue;
+        }
+      }
+      if (player.cash < marginAdd + fee) {
         pushLog(
           state,
-          `❌ 挂单无法成交: ${name} 现金不足以支付保证金 (需 ${marginAdd.toFixed(2)})`,
+          `❌ 挂单无法成交: ${name} 现金不足以支付保证金+手续费 (需 ${(marginAdd + fee).toFixed(2)})`,
           config
         );
         continue;
@@ -146,7 +190,7 @@ function checkOrdersMatch(state, config) {
         const newQty = old.qty + order.quantity;
         const newAvg = (old.qty * old.avgPrice + order.quantity * order.price) / newQty;
         const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
-        player.cash -= marginAdd;
+        player.cash -= marginAdd + fee;
         player.positions[order.commodityId].long = { qty: newQty, avgPrice: newAvg, marginLocked: newMarginLocked };
         pushLog(
           state,
@@ -159,7 +203,7 @@ function checkOrdersMatch(state, config) {
         const newQty = old.qty + order.quantity;
         const newAvg = (old.qty * old.avgPrice + order.quantity * order.price) / newQty;
         const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
-        player.cash -= marginAdd;
+        player.cash -= marginAdd + fee;
         player.positions[order.commodityId].short = { qty: newQty, avgPrice: newAvg, marginLocked: newMarginLocked };
         pushLog(
           state,
@@ -440,6 +484,7 @@ function liquidateAllCropsForAllPlayers(state, config) {
  * @param {typeof GAME_CONFIG} config
  */
 function forceEndGame(state, config) {
+  state.pendingEventModal = null;
   liquidateAllCropsForAllPlayers(state, config);
   const rows = Object.keys(state.players)
     .map((playerId) => ({ playerId, cash: state.players[playerId].cash }))
@@ -456,6 +501,7 @@ function forceEndGame(state, config) {
  * @param {typeof GAME_CONFIG} config
  */
 function endGameDebtVictory(state, config) {
+  state.pendingEventModal = null;
   const rows = Object.keys(state.players)
     .map((playerId) => ({ playerId, cash: state.players[playerId].cash }))
     .sort((a, b) => b.cash - a.cash);
@@ -527,7 +573,7 @@ function nextDayInternal(state, config) {
       forceEndGame(state, config);
       return;
     }
-    tickLongEvent(state);
+    tickLongEvent(state, config);
     state.currentDay = 1;
     state.globalDay += 1;
     syncWeekFields(state, config);
@@ -551,7 +597,7 @@ function nextDayInternal(state, config) {
     checkOrdersMatch(state, config);
   }
   pushLog(state, `⏩ 进入第 ${state.currentDay} 天 (总第${state.globalDay}天)`, config);
-  tickLongEvent(state);
+  tickLongEvent(state, config);
   state.spotPoolSnapshot = { ...state.spotPool };
   generateWorldNpcDailyPlans(state, config);
 }
@@ -564,7 +610,7 @@ function nextDayInternal(state, config) {
  * @param {number} qty
  * @param {typeof GAME_CONFIG} config
  * @param {string} [actorLabel] 日志前缀（如 AI 玩家 id）
- * 注：风控（riskMinEquity）仅对 `state.botPlayerIds` 中的 AI 生效，人类玩家不拦截。
+ * 注：开仓后权益下限对 `state.botPlayerIds` 与单机对手（p2–p10）生效，见 getEffectiveRiskMinEquity；人类不拦截。
  */
 export function openMarketPositionForPlayer(state, playerId, commodityId, direction, qty, config, actorLabel) {
   if (state.gameEnded) {
@@ -605,25 +651,10 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
     pushLog(state, actorLabel ? `[${actorLabel}] ❌ 需先开通创业板` : "❌ 需先开通创业板", config);
     return;
   }
-  if (direction === "short" && commMetaFull && !commMetaFull.requiresGemBoard) {
-    const spot = state.spotPool[commodityId] ?? 0;
-    const cap = Math.floor(0.2 * spot);
-    const cur = player.positions[commodityId].short.qty;
-    if (qty + cur > cap) {
-      pushLog(state, actorLabel ? `[${actorLabel}] ❌ 超出公共池20%卖空上限` : "❌ 超出公共池20%卖空上限", config);
-      return;
-    }
-  }
-  if (direction === "short" && commMetaFull?.requiresGemBoard && player.gemBoardUnlocked) {
-    let invVal = 0;
-    for (const c of config.commodities.filter((x) => x.type === "crop")) {
-      invVal += (player.backpack[c.id] ?? 0) * (state.spotPrices[c.id] ?? 0);
-    }
-    const cap =
-      (player.cash + invVal) * config.rules.shortNotionalCapRatio;
-    const notional = currentPrice * qty;
-    if (notional > cap + 1e-6) {
-      pushLog(state, actorLabel ? `[${actorLabel}] ❌ 超出做空名义上限` : "❌ 超出做空名义上限", config);
+  if (direction === "short") {
+    const err = validatePlayerShortOpen(state, player, commodityId, qty, currentPrice, config);
+    if (err) {
+      pushLog(state, actorLabel ? `[${actorLabel}] ❌ ${err}` : `❌ ${err}`, config);
       return;
     }
   }
@@ -641,8 +672,14 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
     return;
   }
 
-  const isBot = state.botPlayerIds?.includes(playerId) ?? false;
-  if (isBot) {
+  const humanId = state.activePlayerId || DEFAULT_PLAYER_ID;
+  const isMpBot = state.botPlayerIds?.includes(playerId) ?? false;
+  const isSoloAiOpponent =
+    !!state.soloWithAI &&
+    buildSoloAiPlayerIds(humanId).includes(playerId) &&
+    playerId !== humanId;
+  const needsRiskGate = isMpBot || isSoloAiOpponent;
+  if (needsRiskGate) {
     const tempPos = JSON.parse(JSON.stringify(player.positions));
     if (direction === "long") {
       const old = tempPos[commodityId].long;
@@ -669,7 +706,8 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
     const tempPlayer = { positions: tempPos };
     const newMarginTotal = totalMarginLockedForPlayer(tempPlayer, config.commodities);
     const newEquity = player.cash - marginAdd - fee + newMarginTotal + newFloating;
-    if (newEquity < config.rules.riskMinEquity) {
+    const floor = getEffectiveRiskMinEquity(state, config, playerId);
+    if (newEquity < floor) {
       pushLog(
         state,
         actorLabel
@@ -824,7 +862,8 @@ export function openMarketPositionForWorldNpc(state, npcId, commodityId, directi
   }
   if (direction === "short" && commMeta.requiresGemBoard && npc.gemBoardUnlocked) {
     const cap = npc.cash * config.rules.shortNotionalCapRatio;
-    const notional = currentPrice * qty;
+    const curShort = npc.positions[commodityId].short.qty * currentPrice;
+    const notional = curShort + currentPrice * qty;
     if (notional > cap + 1e-6) {
       pushLog(state, `🏘️ [${actorLabel ?? npcId}] ❌ 超出做空名义上限`, config);
       return;
@@ -960,6 +999,10 @@ function placeLimitOrder(state, commodityId, direction, price, qty, config) {
   const limComm = config.commodities.find((c) => c.id === commodityId);
   if (!limComm || limComm.type !== "crop") {
     pushLog(state, "❌ 种子不参与期货挂单", config);
+    return;
+  }
+  if (limComm.requiresGemBoard && !player.gemBoardUnlocked) {
+    pushLog(state, "❌ 需先开通创业板", config);
     return;
   }
   const order = {
@@ -1134,6 +1177,7 @@ function resetGame(state, config) {
   state.dailyEventChance = 0.2;
   state.longEventChance = 0.25;
   state.longEvent = null;
+  state.pendingEventModal = null;
   state.eventFactorByCrop = {};
   state.futuresPriceHistory = {};
   state.futuresOpenHistory = {};
@@ -1587,7 +1631,7 @@ function repayDebt(state, amount, config) {
 
 /**
  * @typedef {object} GameAction
- * @property {'RESET'|'NEXT_DAY'|'OPEN_MARKET'|'CLOSE'|'PLACE_LIMIT'|'CANCEL_ORDER'|'APPEND_LOG'|'USE_SEED'|'SELL_CROP_SPOT'|'UNLOCK_GEM_BOARD'|'UPGRADE_LAND'|'MERCHANT_BUY_SPOT'|'TAKE_LOAN'|'REPAY_DEBT'|'BUY_SEED'|'BUY_FERTILIZER'|'USE_FERTILIZER'|'NPC_BUY_SPOT'|'NPC_SELL_SPOT'|'NPC_GOSSIP'|'MOVE_TO_WAREHOUSE'|'MOVE_FROM_WAREHOUSE'} type
+ * @property {'RESET'|'NEXT_DAY'|'OPEN_MARKET'|'CLOSE'|'PLACE_LIMIT'|'CANCEL_ORDER'|'APPEND_LOG'|'USE_SEED'|'SELL_CROP_SPOT'|'UNLOCK_GEM_BOARD'|'UPGRADE_LAND'|'MERCHANT_BUY_SPOT'|'TAKE_LOAN'|'REPAY_DEBT'|'BUY_SEED'|'BUY_FERTILIZER'|'USE_FERTILIZER'|'NPC_BUY_SPOT'|'NPC_SELL_SPOT'|'NPC_GOSSIP'|'MOVE_TO_WAREHOUSE'|'MOVE_FROM_WAREHOUSE'|'DISMISS_EVENT_MODAL'} type
  * @property {string} [commodityId]
  * @property {'long'|'short'} [direction]
  * @property {number} [qty]
@@ -1698,6 +1742,9 @@ export function reduce(state, action, config = GAME_CONFIG) {
       if (action.commodityId != null && action.qty != null) {
         moveFromWarehouse(state, action.commodityId, action.qty, config);
       }
+      break;
+    case "DISMISS_EVENT_MODAL":
+      state.pendingEventModal = null;
       break;
     default:
       break;
