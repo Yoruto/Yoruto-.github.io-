@@ -95,9 +95,12 @@ export function buildInitialSpotPool(config = GAME_CONFIG) {
   return spotPool;
 }
 
+/** 单机模式对手 AI 初始资金（人类仍为 config.initial.cash） */
+export const SOLO_AI_INITIAL_CASH = 500000;
+
 /**
  * @param {typeof GAME_CONFIG} config
- * @param {{ gemBoardUnlocked?: boolean }} [options] AI/电脑对手可默认 true，与《游戏设计》NPC 策略一致
+ * @param {{ gemBoardUnlocked?: boolean, initialCash?: number }} [options] AI/电脑对手可默认 true，与《游戏设计》NPC 策略一致
  */
 export function createPlayerState(config = GAME_CONFIG, options = {}) {
   const backpack = buildEmptyBackpack(config.commodities);
@@ -109,11 +112,13 @@ export function createPlayerState(config = GAME_CONFIG, options = {}) {
       }
     }
   }
+  const cash0 = options.initialCash != null && Number.isFinite(options.initialCash) ? options.initialCash : config.initial.cash;
   return {
-    cash: config.initial.cash,
+    cash: cash0,
     positions: buildEmptyPositions(config.commodities),
     backpack,
     status: /** @type {'playing' | 'failed' | 'eliminated'} */ ("playing"),
+    soloAiBailoutUsed: false,
     pendingOrders: /** @type {object[]} */ ([]),
     landLevel: 0,
     gemBoardUnlocked: options.gemBoardUnlocked ?? false,
@@ -164,6 +169,7 @@ function buildEmptyVolumeHistory(config) {
  *   cash: number,
  *   stock: Record<string, number>,
  *   gemBoardUnlocked: boolean,
+ *   positions: ReturnType<buildEmptyPositions>,
  * }} NpcState
  */
 
@@ -186,6 +192,7 @@ export function createDefaultNpcs(config) {
       cash: 100000,
       stock,
       gemBoardUnlocked: true,
+      positions: buildEmptyPositions(config.commodities),
     });
   }
   return npcs;
@@ -228,7 +235,7 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     players[id] = createPlayerState(config);
     if (soloWithAI) {
       for (const aid of buildSoloAiPlayerIds(id)) {
-        players[aid] = createPlayerState(config, { gemBoardUnlocked: true });
+        players[aid] = createPlayerState(config, { gemBoardUnlocked: true, initialCash: SOLO_AI_INITIAL_CASH });
       }
     }
     humanPlayerIds = [];
@@ -302,6 +309,10 @@ export function createInitialGameState(config = GAME_CONFIG, options = {}) {
     totalGameDays: totalDays,
     /** NPC 打听消息最近一条（展示用） */
     lastGossip: /** @type {string | null} */ (null),
+    /** 世界 NPC 当日期货意向文案（打听消息） */
+    worldNpcGossipById: /** @type {Record<string, string>} */ ({}),
+    /** 世界 NPC 当日待执行期货步骤（见 ai/worldNpcFutures.js） */
+    worldNpcIntents: /** @type {null | object[]} */ (null),
   };
 }
 

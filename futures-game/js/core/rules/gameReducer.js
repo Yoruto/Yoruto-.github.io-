@@ -13,6 +13,7 @@ import { computeNextPriceFromDailyStats } from "./pricing.js";
 import { applySpotPriceFromPoolChange, merchantDailyBuyCap, shopBuyPrice, shopSellPrice } from "./spotMarket.js";
 import {
   buildEmptyDailyStats,
+  buildEmptyPositions,
   buildInitialSpotPool,
   buildMultiplayerBotIds,
   buildSoloAiPlayerIds,
@@ -20,8 +21,10 @@ import {
   createPlayerState,
   DEFAULT_PLAYER_ID,
   getActivePlayer,
+  SOLO_AI_INITIAL_CASH,
   totalMarginLockedForPlayer,
 } from "../state.js";
+import { generateWorldNpcDailyPlans, wouldPassRiskForNpc } from "../../ai/worldNpcFutures.js";
 
 /**
  * @param {ReturnType<import('./state.js').createInitialGameState>} state
@@ -171,6 +174,19 @@ function checkOrdersMatch(state, config) {
 }
 
 /**
+ * 交割日后：世界 NPC 期货资金固定重置为 10 万、持仓清空（现货库存 stock 不变）
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {typeof GAME_CONFIG} config
+ */
+function resetWorldNpcsWeekly(state, config) {
+  for (const npc of state.npcs) {
+    npc.cash = 100000;
+    npc.positions = buildEmptyPositions(config.commodities);
+  }
+  pushLog(state, "🏘️ 世界 NPC 期货资金已重置为 10 万/人（本周交割后）", config);
+}
+
+/**
  * @param {ReturnType<import('./state.js').createInitialGameState>} state
  * @param {typeof GAME_CONFIG} config
  * @param {Record<string, number>} settlementPrices 当日收盘期货价
@@ -257,7 +273,66 @@ function performDelivery(state, config, settlementPrices) {
       pushLog(state, `📦 ${name} 多头 ${take}手 @ ${dPrice.toFixed(2)} 付 ${cost.toFixed(2)}`, config);
       checkBankruptDoc(pl, state, config, pid);
     }
+
+    const shortNpcs = state.npcs
+      .filter((n) => (n.positions[id]?.short.qty ?? 0) > 0)
+      .sort((a, b) => (b.positions[id].short.qty ?? 0) - (a.positions[id].short.qty ?? 0));
+    for (const npc of shortNpcs) {
+      const shortQty = npc.positions[id].short.qty;
+      const poolBefore = state.spotPool[id] ?? 0;
+      const backpackAvail = 0;
+      let need = shortQty;
+      const useBack = Math.min(need, backpackAvail);
+      need -= useBack;
+      const fromPool = Math.min(need, poolBefore);
+      state.spotPool[id] = poolBefore - fromPool;
+      need -= fromPool;
+      const delivered = useBack + fromPool;
+      const deficit = shortQty - delivered;
+      let payDelivered = dPrice * delivered;
+      let payDeficit = 0;
+      if (deficit > 0) {
+        payDeficit = buyPx * deficit;
+      }
+      const shortMargin = npc.positions[id].short.marginLocked ?? 0;
+      npc.cash += shortMargin - payDelivered - payDeficit;
+      npc.positions[id].short = { qty: 0, avgPrice: 0, marginLocked: 0 };
+      applySpotPriceFromPoolChange(state, id, poolBefore, state.spotPool[id] ?? 0, config);
+      pushLog(
+        state,
+        `📦 ${name} 世界NPC ${npc.name} 空头 ${shortQty}手 结算价 ${dPrice.toFixed(2)}；缺货 ${deficit} 按商店买价 ${buyPx.toFixed(2)} 补`,
+        config
+      );
+    }
+
+    const longNpcs = state.npcs
+      .filter((n) => (n.positions[id]?.long.qty ?? 0) > 0)
+      .sort((a, b) => (b.positions[id].long.qty ?? 0) - (a.positions[id].long.qty ?? 0));
+    for (const npc of longNpcs) {
+      const longQty = npc.positions[id].long.qty;
+      const poolBefore = state.spotPool[id] ?? 0;
+      const take = Math.min(longQty, poolBefore);
+      const longMargin = npc.positions[id].long.marginLocked ?? 0;
+      npc.positions[id].long = { qty: 0, avgPrice: 0, marginLocked: 0 };
+      if (take === 0) {
+        npc.cash += longMargin;
+        pushLog(state, `📦 ${name} 世界NPC ${npc.name} 多头 ${longQty}手：池无货，保证金退回`, config);
+        continue;
+      }
+      const cost = dPrice * take;
+      npc.cash += longMargin - cost;
+      npc.stock[id] = (npc.stock[id] ?? 0) + take;
+      state.spotPool[id] = poolBefore - take;
+      applySpotPriceFromPoolChange(state, id, poolBefore, state.spotPool[id] ?? 0, config);
+      pushLog(
+        state,
+        `📦 ${name} 世界NPC ${npc.name} 多头 ${take}手 @ ${dPrice.toFixed(2)} 付 ${cost.toFixed(2)}（货入库存）`,
+        config
+      );
+    }
   }
+
+  resetWorldNpcsWeekly(state, config);
 
   for (const pid of Object.keys(state.players)) {
     state.players[pid].pendingOrders = [];
@@ -279,8 +354,34 @@ function checkBankruptDoc(pl, state, config, playerId) {
   }
   const nw = pl.cash + inv;
   if (nw < 0) {
+    const human = state.activePlayerId || DEFAULT_PLAYER_ID;
+    const soloIds = state.soloWithAI ? buildSoloAiPlayerIds(human) : [];
+    if (soloIds.includes(playerId) && playerId !== human) {
+      if (!pl.soloAiBailoutUsed) {
+        pl.cash += 1000000;
+        pl.soloAiBailoutUsed = true;
+        pushLog(state, `🛟 ${playerId} 净资产 ${nw.toFixed(2)} < 0，获一次性救助 +100 万`, config);
+        return;
+      }
+    }
     pl.status = "eliminated";
     pushLog(state, `💀 ${playerId} 净资产 ${nw.toFixed(2)} < 0，破产`, config);
+  }
+}
+
+/**
+ * 单机对手：新周起每周 +10 万（与利息同周次）
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {typeof GAME_CONFIG} config
+ */
+function supplementSoloAiOpponentsWeekly(state, config) {
+  if (!state.soloWithAI) return;
+  const human = state.activePlayerId || DEFAULT_PLAYER_ID;
+  for (const aid of buildSoloAiPlayerIds(human)) {
+    const pl = state.players[aid];
+    if (!pl || pl.status !== "playing") continue;
+    pl.cash += 100000;
+    pushLog(state, `💰 对手 ${aid} 周补贴 +10 万`, config);
   }
 }
 
@@ -434,9 +535,11 @@ function nextDayInternal(state, config) {
     if (state.globalWeek >= 2) {
       chargeWeeklyInterestIfNeeded(state, config);
       pushLog(state, `📌 本周利息 ${config.economy.weeklyInterest} / 人`, config);
+      supplementSoloAiOpponentsWeekly(state, config);
     }
     pushLog(state, "🌾 新周第1天。", config);
     state.spotPoolSnapshot = { ...state.spotPool };
+    generateWorldNpcDailyPlans(state, config);
     return;
   }
 
@@ -450,6 +553,7 @@ function nextDayInternal(state, config) {
   pushLog(state, `⏩ 进入第 ${state.currentDay} 天 (总第${state.globalDay}天)`, config);
   tickLongEvent(state);
   state.spotPoolSnapshot = { ...state.spotPool };
+  generateWorldNpcDailyPlans(state, config);
 }
 
 /**
@@ -471,6 +575,10 @@ export function openMarketPositionForPlayer(state, playerId, commodityId, direct
   if (!player) return;
   if (player.status === "failed") {
     pushLog(state, actorLabel ? `[${actorLabel}] ❌ 已失败，无法交易` : "❌ 已失败，无法交易", config);
+    return;
+  }
+  if (player.status === "eliminated") {
+    pushLog(state, actorLabel ? `[${actorLabel}] ❌ 已出局，无法交易` : "❌ 已出局，无法交易", config);
     return;
   }
   if (qty <= 0 || !Number.isFinite(qty)) {
@@ -630,6 +738,10 @@ export function closePositionForPlayer(state, playerId, commodityId, direction, 
     pushLog(state, actorLabel ? `[${actorLabel}] ❌ 已失败，无法平仓` : "❌ 已失败，无法平仓", config);
     return;
   }
+  if (player.status === "eliminated") {
+    pushLog(state, actorLabel ? `[${actorLabel}] ❌ 已出局，无法平仓` : "❌ 已出局，无法平仓", config);
+    return;
+  }
   const pos = player.positions[commodityId][direction];
   if (pos.qty === 0) {
     pushLog(state, actorLabel ? `[${actorLabel}] 无${direction === "long" ? "多单" : "空单"}可平` : `无${direction === "long" ? "多单" : "空单"}可平`, config);
@@ -666,6 +778,150 @@ export function closePositionForPlayer(state, playerId, commodityId, direction, 
   }
   const fee = futuresFeeAmount(currPrice * qty, config, state.feePermanentDelta);
   player.cash += released + profit - fee;
+  pushLog(
+    state,
+    `${tag}💸 平仓 ${direction === "long" ? "多单" : "空单"} ${commodityName(config, commodityId)} ${qty}手，盈亏 ${profit >= 0 ? `+${profit.toFixed(2)}` : `${profit.toFixed(2)}`} 手续费${fee.toFixed(2)}`,
+    config
+  );
+}
+
+/**
+ * 世界 NPC 市价开仓（资金与 `npc.positions`）
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {string} npcId
+ * @param {string} commodityId
+ * @param {'long'|'short'} direction
+ * @param {number} qty
+ * @param {typeof GAME_CONFIG} config
+ * @param {string} [actorLabel]
+ */
+export function openMarketPositionForWorldNpc(state, npcId, commodityId, direction, qty, config, actorLabel) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const npc = state.npcs.find((n) => n.id === npcId);
+  if (!npc) return;
+  if (qty <= 0 || !Number.isFinite(qty)) return;
+  qty = Math.floor(qty);
+  if (qty === 0) return;
+
+  const commMeta = config.commodities.find((c) => c.id === commodityId);
+  if (!commMeta || commMeta.type !== "crop") return;
+
+  const currentPrice = state.prices[commodityId];
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) return;
+
+  if (commMeta.requiresGemBoard && !npc.gemBoardUnlocked) return;
+  if (direction === "short" && !commMeta.requiresGemBoard) {
+    const spot = state.spotPool[commodityId] ?? 0;
+    const cap = Math.floor(0.2 * spot);
+    const cur = npc.positions[commodityId].short.qty;
+    if (qty + cur > cap) {
+      pushLog(state, `🏘️ [${actorLabel ?? npcId}] ❌ 超出公共池20%卖空上限`, config);
+      return;
+    }
+  }
+  if (direction === "short" && commMeta.requiresGemBoard && npc.gemBoardUnlocked) {
+    const cap = npc.cash * config.rules.shortNotionalCapRatio;
+    const notional = currentPrice * qty;
+    if (notional > cap + 1e-6) {
+      pushLog(state, `🏘️ [${actorLabel ?? npcId}] ❌ 超出做空名义上限`, config);
+      return;
+    }
+  }
+
+  const marginAdd = config.rules.marginRate * currentPrice * qty;
+  const fee = futuresFeeAmount(currentPrice * qty, config, state.feePermanentDelta);
+  if (npc.cash < marginAdd + fee) return;
+
+  if (!wouldPassRiskForNpc(npc, state, commodityId, direction, qty, config)) {
+    pushLog(
+      state,
+      `🏘️ [${actorLabel ?? npcId}] ⚠️ 风控拦截: 开仓后预计资产过低`,
+      config
+    );
+    return;
+  }
+
+  const tag = actorLabel ? `🏘️ [${actorLabel}] ` : `🏘️ [${npcId}] `;
+  npc.cash -= marginAdd + fee;
+  if (direction === "long") {
+    bumpDailyStat(state, commodityId, "openLong", qty);
+    const old = npc.positions[commodityId].long;
+    const newTotal = old.qty + qty;
+    const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotal;
+    const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+    npc.positions[commodityId].long = { qty: newTotal, avgPrice: newAvg, marginLocked: newMarginLocked };
+    pushLog(
+      state,
+      `${tag}🎯 市价开多 ${commodityName(config, commodityId)} ${qty}手 @ ${currentPrice.toFixed(2)} 手续费${fee.toFixed(2)}`,
+      config
+    );
+  } else {
+    bumpDailyStat(state, commodityId, "openShort", qty);
+    const old = npc.positions[commodityId].short;
+    const newTotal = old.qty + qty;
+    const newAvg = (old.qty * old.avgPrice + qty * currentPrice) / newTotal;
+    const newMarginLocked = (old.marginLocked ?? 0) + marginAdd;
+    npc.positions[commodityId].short = { qty: newTotal, avgPrice: newAvg, marginLocked: newMarginLocked };
+    pushLog(
+      state,
+      `${tag}🎯 市价开空 ${commodityName(config, commodityId)} ${qty}手 @ ${currentPrice.toFixed(2)} 手续费${fee.toFixed(2)}`,
+      config
+    );
+  }
+}
+
+/**
+ * @param {ReturnType<import('./state.js').createInitialGameState>} state
+ * @param {string} npcId
+ * @param {string} commodityId
+ * @param {'long'|'short'} direction
+ * @param {number} qty
+ * @param {typeof GAME_CONFIG} config
+ * @param {string} [actorLabel]
+ */
+export function closePositionForWorldNpc(state, npcId, commodityId, direction, qty, config, actorLabel) {
+  if (state.gameEnded) {
+    pushLog(state, "❌ 游戏已结束", config);
+    return;
+  }
+  const npc = state.npcs.find((n) => n.id === npcId);
+  if (!npc) return;
+  const pos = npc.positions[commodityId][direction];
+  if (pos.qty === 0) return;
+  if (qty <= 0 || !Number.isFinite(qty)) return;
+  qty = Math.min(Math.floor(qty), pos.qty);
+  if (qty === 0) return;
+
+  const currPrice = state.prices[commodityId];
+  const locked = pos.marginLocked ?? 0;
+  const released = pos.qty > 0 ? (locked * qty) / pos.qty : 0;
+  const remLocked = locked - released;
+  const tag = actorLabel ? `🏘️ [${actorLabel}] ` : `🏘️ [${npcId}] `;
+  let profit = 0;
+  if (direction === "long") {
+    bumpDailyStat(state, commodityId, "longClose", qty);
+    profit = (currPrice - pos.avgPrice) * qty;
+    const newQty = pos.qty - qty;
+    if (newQty === 0) {
+      npc.positions[commodityId].long = { qty: 0, avgPrice: 0, marginLocked: 0 };
+    } else {
+      npc.positions[commodityId].long = { qty: newQty, avgPrice: pos.avgPrice, marginLocked: remLocked };
+    }
+  } else {
+    bumpDailyStat(state, commodityId, "shortClose", qty);
+    profit = (pos.avgPrice - currPrice) * qty;
+    const newQty = pos.qty - qty;
+    if (newQty === 0) {
+      npc.positions[commodityId].short = { qty: 0, avgPrice: 0, marginLocked: 0 };
+    } else {
+      npc.positions[commodityId].short = { qty: newQty, avgPrice: pos.avgPrice, marginLocked: remLocked };
+    }
+  }
+  const fee = futuresFeeAmount(currPrice * qty, config, state.feePermanentDelta);
+  npc.cash += released + profit - fee;
   pushLog(
     state,
     `${tag}💸 平仓 ${direction === "long" ? "多单" : "空单"} ${commodityName(config, commodityId)} ${qty}手，盈亏 ${profit >= 0 ? `+${profit.toFixed(2)}` : `${profit.toFixed(2)}`} 手续费${fee.toFixed(2)}`,
@@ -885,6 +1141,8 @@ function resetGame(state, config) {
   state.futuresChartGlobalDays = {};
   state.spotPriceHistory = {};
   state.lastGossip = null;
+  state.worldNpcGossipById = {};
+  state.worldNpcIntents = null;
   state.volumeHistory5d = {};
   for (const c of futuresTradableCommodities(config)) {
     state.volumeHistory5d[c.id] = [0, 0, 0, 0, 0];
@@ -908,7 +1166,7 @@ function resetGame(state, config) {
     /** @type {Record<string, ReturnType<createPlayerState>>} */
     const players = { [pid]: createPlayerState(config) };
     for (const aid of buildSoloAiPlayerIds(pid)) {
-      players[aid] = createPlayerState(config, { gemBoardUnlocked: true });
+      players[aid] = createPlayerState(config, { gemBoardUnlocked: true, initialCash: SOLO_AI_INITIAL_CASH });
     }
     state.players = players;
   } else {
@@ -921,6 +1179,7 @@ function resetGame(state, config) {
   for (const pkey of Object.keys(state.players)) {
     state.playerLabels[pkey] = labelsBackup[pkey] ?? pkey;
   }
+  generateWorldNpcDailyPlans(state, config);
   pushLog(state, "🔄 游戏已重置。初始资金10万，债务200万，52周周期。", config);
 }
 
@@ -1179,6 +1438,7 @@ function npcGossip(state, npcId, config) {
     return;
   }
   pl.cash -= cost;
+  const planned = state.worldNpcGossipById?.[npcId];
   const crops = cropCommodities(config);
   const pick = crops[Math.floor(Math.random() * crops.length)];
   const hints = [
@@ -1186,7 +1446,7 @@ function npcGossip(state, npcId, config) {
     `风闻：有 NPC 近两日可能在盯 ${pick?.name ?? "某品种"}`,
     `坊间：整体净头寸氛围偏 ${Math.random() < 0.5 ? "多" : "空"}（仅供参考）`,
   ];
-  const msg = hints[Math.floor(Math.random() * hints.length)];
+  const msg = planned && String(planned).trim() !== "" ? planned : hints[Math.floor(Math.random() * hints.length)];
   state.lastGossip = msg;
   pushLog(state, `💬 ${npc.name}：${msg}`, config);
 }

@@ -388,6 +388,30 @@
             overflow: hidden;
             border: 1px solid rgba(219, 184, 124, 0.2);
         }
+        .futures-lwc-tooltip {
+            pointer-events: none;
+            min-width: 9rem;
+            padding: 8px 10px;
+            font-size: 0.75rem;
+            line-height: 1.45;
+            color: #e9dcc3;
+            background: rgba(22, 18, 14, 0.96);
+            border: 1px solid rgba(219, 184, 124, 0.45);
+            border-radius: 6px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+        }
+        .futures-lwc-tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .futures-lwc-tooltip-row + .futures-lwc-tooltip-row {
+            margin-top: 4px;
+        }
+        .futures-lwc-tooltip-val {
+            font-weight: 600;
+            color: #ffeaac;
+        }
         .backpack-subtitle {
             font-size: 0.85rem;
             color: #e9c891;

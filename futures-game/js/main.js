@@ -1,3 +1,4 @@
+import { generateWorldNpcDailyPlans } from "./ai/worldNpcFutures.js";
 import { GAME_CONFIG } from "./config.js";
 import { createGameSession } from "./core/GameSession.js";
 import { createLocalRoomTransport } from "./room.js";
@@ -10,6 +11,7 @@ if (!root) throw new Error("Missing #app");
 
 /** @type {ReturnType<typeof createInitialGameState>} */
 let gameState = createInitialGameState();
+generateWorldNpcDailyPlans(gameState, GAME_CONFIG);
 
 const session = createGameSession({
   getState: () => gameState,
@@ -37,6 +39,7 @@ function onEnterGame(playerId, soloWithAI = false, mp = {}) {
     multiplayerWithBots,
     playerLabels,
   });
+  generateWorldNpcDailyPlans(gameState, GAME_CONFIG);
   session.dispatch({
     type: "APPEND_LOG",
     message: GAME_CONFIG.features?.limitOrders

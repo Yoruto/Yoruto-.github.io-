@@ -1,7 +1,10 @@
+import { executeWorldNpcFuturesTurns } from "../ai/worldNpcFutures.js";
 import { runBotTurns, runSoloAITurns } from "../ai/index.js";
 import {
   closePositionForPlayer,
+  closePositionForWorldNpc,
   openMarketPositionForPlayer,
+  openMarketPositionForWorldNpc,
   reduce,
 } from "./rules/gameReducer.js";
 import { createLocalSyncAdapter } from "./sync/LocalSyncAdapter.js";
@@ -23,12 +26,18 @@ export function createGameSession({ getState, config, syncAdapter = createLocalS
     closePositionForPlayer,
   };
 
+  const worldNpcApi = {
+    openMarketPositionForWorldNpc,
+    closePositionForWorldNpc,
+  };
+
   /**
    * @param {import('./rules/gameReducer.js').GameAction} action
    */
   function applyAction(action) {
     const state = getState();
     if (action.type === "NEXT_DAY") {
+      executeWorldNpcFuturesTurns(state, config, worldNpcApi);
       if (state.multiplayerWithBots && state.botPlayerIds?.length) {
         runBotTurns(state, config, aiApi, state.botPlayerIds);
       } else {

@@ -1,5 +1,9 @@
 import { futuresTradableCommodities } from "../config.js";
-import { buildFuturesLwcSeriesData, createFuturesLwcChart } from "./futuresLwcChart.js";
+import {
+  applyFuturesChartViewport,
+  buildFuturesLwcSeriesData,
+  createFuturesLwcChart,
+} from "./futuresLwcChart.js";
 import { computeEquity, maxOpenMarketQty } from "../logic.js";
 import { DEFAULT_PLAYER_ID, getActivePlayer, normalizePlayerId } from "../state.js";
 
@@ -174,10 +178,12 @@ export function mountApp(root, ctx) {
     return out;
   }
 
-  // 统一显示创建/加入房间 UI（本地内存房间）
-  root.querySelectorAll(".local-only").forEach((el) => {
-    el.classList.remove("hidden");
-  });
+  // 仅在允许房间模式时展开「本地房间」相关 UI；否则保留 index 中对这些元素的 hidden（单机主界面不展示创建/加入）
+  if (roomModeEnabled) {
+    root.querySelectorAll(".local-only").forEach((el) => {
+      el.classList.remove("hidden");
+    });
+  }
   // 隐藏原来的 Playroom 联机按钮（改用创建/加入房间流程）
   if (btnPlayroomOnline) {
     btnPlayroomOnline.classList.add("hidden");
@@ -397,7 +403,7 @@ export function mountApp(root, ctx) {
       const { candles, volumes } = buildFuturesLwcSeriesData(state, config, selectedFuturesCommodityId);
       futuresLwcUi.api.candleSeries.setData(candles);
       futuresLwcUi.api.volumeSeries.setData(volumes);
-      if (candles.length > 0) futuresLwcUi.api.chart.timeScale().fitContent();
+      applyFuturesChartViewport(futuresLwcUi.api.chart, candles.length);
     }
 
     const uiLocked = gameOver || player.status === "failed" || player.status === "eliminated";

@@ -3,6 +3,9 @@
  */
 import { createChart, ColorType, CrosshairMode } from "https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/+esm";
 
+/** 与多日数据时相近的柱心间距（像素），少天数时避免单根 K 线撑满 */
+const TARGET_TIME_BAR_SPACING_PX = 10;
+
 /** @param {number} globalDay */
 function globalDayToBusinessDay(globalDay) {
   const d = new Date(Date.UTC(2026, 0, globalDay));
@@ -46,6 +49,26 @@ export function buildFuturesLwcSeriesData(state, config, commodityId) {
     volumesOut.push({ time, value: v, color: up ? upColor : downColor });
   }
   return { candles, volumes: volumesOut };
+}
+
+/**
+ * 少天数时 fitContent 会把 barSpacing 拉大；在保持「看全数据」的前提下扩逻辑区间，使柱宽接近多日观感。
+ * @param {ReturnType<typeof createChart>} chart
+ * @param {number} barCount
+ */
+export function applyFuturesChartViewport(chart, barCount) {
+  if (barCount < 1) return;
+  chart.timeScale().fitContent();
+  requestAnimationFrame(() => {
+    const ts = chart.timeScale();
+    const vr = ts.getVisibleLogicalRange();
+    if (!vr) return;
+    const bs = ts.options().barSpacing;
+    if (bs <= TARGET_TIME_BAR_SPACING_PX) return;
+    const mid = (vr.from + vr.to) / 2;
+    const half = ((vr.to - vr.from) / 2) * (bs / TARGET_TIME_BAR_SPACING_PX);
+    ts.setVisibleLogicalRange({ from: mid - half, to: mid + half });
+  });
 }
 
 /**
@@ -108,12 +131,65 @@ export function createFuturesLwcChart(mountEl, opts = {}) {
   });
   ro.observe(mountEl);
 
+  const tooltip = document.createElement("div");
+  tooltip.className = "futures-lwc-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.setAttribute("aria-hidden", "true");
+  tooltip.style.display = "none";
+  document.body.appendChild(tooltip);
+
+  const onCrosshairMove = (param) => {
+    if (!param.point || param.time === undefined) {
+      tooltip.style.display = "none";
+      tooltip.setAttribute("aria-hidden", "true");
+      return;
+    }
+    const cndl = param.seriesData.get(candleSeries);
+    const vol = param.seriesData.get(volumeSeries);
+    const o = cndl && "open" in cndl ? cndl.open : null;
+    const c = cndl && "close" in cndl ? cndl.close : null;
+    const v = vol && "value" in vol ? vol.value : null;
+    if (o == null || c == null) {
+      tooltip.style.display = "none";
+      return;
+    }
+    let pctText = "—";
+    if (o > 0) {
+      const pct = ((c - o) / o) * 100;
+      const sign = pct > 0 ? "+" : "";
+      pctText = `${sign}${pct.toFixed(2)}%`;
+    }
+    const volText = v != null ? volumeSeries.priceFormatter().format(v) : "—";
+    tooltip.innerHTML = `<div class="futures-lwc-tooltip-row">成交量 <span class="futures-lwc-tooltip-val">${volText}</span></div><div class="futures-lwc-tooltip-row">当日涨跌 <span class="futures-lwc-tooltip-val">${pctText}</span></div>`;
+    tooltip.style.display = "block";
+    tooltip.setAttribute("aria-hidden", "false");
+    const chartEl = chart.chartElement();
+    const rect = chartEl.getBoundingClientRect();
+    const pad = 12;
+    const tw = tooltip.offsetWidth;
+    const th = tooltip.offsetHeight;
+    let left = rect.left + param.point.x + pad;
+    let top = rect.top + param.point.y + pad;
+    if (left + tw > window.innerWidth - 8) left = rect.left + param.point.x - tw - pad;
+    if (top + th > window.innerHeight - 8) top = rect.top + param.point.y - th - pad;
+    left = Math.max(8, left);
+    top = Math.max(8, top);
+    tooltip.style.position = "fixed";
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    tooltip.style.zIndex = "12000";
+  };
+
+  chart.subscribeCrosshairMove(onCrosshairMove);
+
   return {
     chart,
     candleSeries,
     volumeSeries,
     resizeObserver: ro,
     remove() {
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      tooltip.remove();
       ro.disconnect();
       chart.remove();
     },
