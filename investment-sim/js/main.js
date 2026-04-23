@@ -716,6 +716,7 @@ function render() {
         </div>
         <div class="next-month-wrap">
           <button type="button" class="primary" data-action="next-month" ${canNext ? '' : 'disabled'} title="结算本月并进入下一月（需先处理透支）">下一个月</button>
+          <button type="button" class="danger" data-action="new-game" title="重新开始新游戏（可输入种子）" style="margin-left:0.5rem;">快速重来</button>
         </div>
       </div>
       <p class="month-dock-hint">「下一个月」与下方经营面板分离：本月内可并行操作行情、在营业务、指导、开业与人事，准备好后再点此推进回合。下月预测：股市 ${sentimentText(state.predictedEquityC)} · 大宗 ${sentimentText(state.predictedCommodityC)}</p>
