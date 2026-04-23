@@ -48,6 +48,58 @@ let state = null;
 let currentView = 'market'; // 当前C区域显示的视图
 let selectedBusinessId = null; // 当前选中的业务ID（用于业务详情视图）
 
+// #region agent log - embedded config
+// 内嵌的默认配置数据（当无法从服务器加载 JSON 时使用）
+const EMBEDDED_CONFIG = {
+  "schemaVersion": 1,
+  "gameId": "investment-company-v2",
+  "sectors": [
+    { "id": "fin", "name": "金融", "nameEn": "Financial", "sectorBetaBp": 500 },
+    { "id": "re", "name": "地产与基建", "nameEn": "Real Estate & Infra", "sectorBetaBp": 300 },
+    { "id": "cons", "name": "消费", "nameEn": "Consumer", "sectorBetaBp": 100 },
+    { "id": "tech", "name": "科技与通信", "nameEn": "Technology & Comms", "sectorBetaBp": 800 },
+    { "id": "health", "name": "医疗与生命", "nameEn": "Healthcare", "sectorBetaBp": 200 },
+    { "id": "ind", "name": "工业与制造", "nameEn": "Industrials", "sectorBetaBp": 400 },
+    { "id": "ene", "name": "能源与材料", "nameEn": "Energy & Materials", "sectorBetaBp": 600 },
+    { "id": "trans", "name": "交通运输", "nameEn": "Transportation", "sectorBetaBp": 250 },
+    { "id": "util", "name": "公用与环保", "nameEn": "Utilities & Environment", "sectorBetaBp": -500 },
+    { "id": "agri", "name": "农业与食品原料", "nameEn": "Agriculture", "sectorBetaBp": 50 }
+  ],
+  "stocks": [
+    { "id": "STK0001", "name": "城信城市商业银行", "shortName": "城信", "sectorId": "fin", "listingYearMonth": "1992-05", "basePrice": 45.50, "matureYear": 1992, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true },
+    { "id": "STK0002", "name": "华安联合证券", "shortName": "华安", "sectorId": "fin", "listingYearMonth": "1994-11", "basePrice": 128.00, "matureYear": 1999, "matureBetaExtraBp": 400, "dividendRateAnnual": 0.02, "isFictional": true },
+    { "id": "STK0003", "name": "东岸置地发展", "shortName": "东岸", "sectorId": "re", "listingYearMonth": "1993-02", "basePrice": 85.20, "matureYear": 1993, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.028, "isFictional": true },
+    { "id": "STK0004", "name": "宏基路桥建设", "shortName": "宏基", "sectorId": "re", "listingYearMonth": "1995-08", "basePrice": 32.80, "matureYear": 2003, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.022, "isFictional": true },
+    { "id": "STK0005", "name": "金穗食品加工", "shortName": "金穗", "sectorId": "cons", "listingYearMonth": "1991-09", "basePrice": 156.50, "matureYear": 1991, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.032, "isFictional": true },
+    { "id": "STK0006", "name": "乐购连锁零售", "shortName": "乐购", "sectorId": "cons", "listingYearMonth": "1996-04", "basePrice": 78.30, "matureYear": 2001, "matureBetaExtraBp": -100, "dividendRateAnnual": 0.03, "isFictional": true },
+    { "id": "STK0007", "name": "东方微电子", "shortName": "东微", "sectorId": "tech", "listingYearMonth": "1997-12", "basePrice": 268.80, "matureYear": 2007, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.015, "isFictional": true },
+    { "id": "STK0008", "name": "云联光通信", "shortName": "云联", "sectorId": "tech", "listingYearMonth": "2000-03", "basePrice": 198.00, "matureYear": 2003, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.012, "isFictional": true },
+    { "id": "STK0009", "name": "康宁联合制药", "shortName": "康宁", "sectorId": "health", "listingYearMonth": "1993-07", "basePrice": 112.50, "matureYear": 1993, "matureBetaExtraBp": 50, "dividendRateAnnual": 0.018, "isFictional": true },
+    { "id": "STK0010", "name": "同和医疗集团", "shortName": "同和", "sectorId": "health", "listingYearMonth": "1998-06", "basePrice": 67.20, "matureYear": 2003, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.02, "isFictional": true },
+    { "id": "STK0011", "name": "重联重工机械", "shortName": "重联", "sectorId": "ind", "listingYearMonth": "1990-10", "basePrice": 45.80, "matureYear": 1990, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.025, "isFictional": true },
+    { "id": "STK0012", "name": "精密切削工具", "shortName": "精密切削", "sectorId": "ind", "listingYearMonth": "1994-01", "basePrice": 89.60, "matureYear": 2002, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.022, "isFictional": true },
+    { "id": "STK0013", "name": "长岭石化", "shortName": "长岭", "sectorId": "ene", "listingYearMonth": "1991-04", "basePrice": 145.00, "matureYear": 1991, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.04, "isFictional": true },
+    { "id": "STK0014", "name": "西北矿业", "shortName": "西矿", "sectorId": "ene", "listingYearMonth": "1996-09", "basePrice": 58.40, "matureYear": 2002, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true },
+    { "id": "STK0015", "name": "远洋航运", "shortName": "远洋", "sectorId": "trans", "listingYearMonth": "1992-12", "basePrice": 34.50, "matureYear": 1992, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.03, "isFictional": true },
+    { "id": "STK0016", "name": "顺达综合物流", "shortName": "顺达", "sectorId": "trans", "listingYearMonth": "1999-11", "basePrice": 76.80, "matureYear": 2004, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.028, "isFictional": true },
+    { "id": "STK0017", "name": "绿源城市水务", "shortName": "绿源", "sectorId": "util", "listingYearMonth": "1993-05", "basePrice": 298.00, "matureYear": 1993, "matureBetaExtraBp": -300, "dividendRateAnnual": 0.045, "isFictional": true },
+    { "id": "STK0018", "name": "净能环保", "shortName": "净能", "sectorId": "util", "listingYearMonth": "2002-08", "basePrice": 15.60, "matureYear": 2010, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.02, "isFictional": true },
+    { "id": "STK0019", "name": "丰禾种业", "shortName": "丰禾", "sectorId": "agri", "listingYearMonth": "1990-08", "basePrice": 52.30, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.025, "isFictional": true },
+    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "1994-02", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true }
+  ],
+  "futures": {
+    "defaultVariantId": "composite",
+    "leverageOptions": [1, 2, 3],
+    "variants": {
+      "composite": { "displayName": "大宗综合", "description": "一篮子可交割品种", "B_fut_bp_by_c": [600, 300, 0, -300, -600] },
+      "energy": { "displayName": "能源", "description": "油、煤、气等", "B_fut_bp_by_c": [800, 400, 0, -400, -800] },
+      "metal": { "displayName": "金属", "description": "工业金属", "B_fut_bp_by_c": [700, 350, 0, -350, -700] },
+      "agri": { "displayName": "农产品", "description": "农产口粮/油料等", "B_fut_bp_by_c": [500, 250, 0, -250, -500] }
+    }
+  }
+};
+// #endregion
+
 // 情绪标签渲染（带样式类）
 function sentimentLine(c, withClass = false) {
   const i = Math.max(0, Math.min(4, c | 0));
@@ -1221,6 +1273,10 @@ function onAction(ev) {
 }
 
 async function bootstrap() {
+  // #region agent log - bootstrap start
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:start',message:'bootstrap started',data:{origin:window.location.origin,pathname:window.location.pathname,href:window.location.href},timestamp:Date.now(),runId:'debug1',hypothesisId:'H1-path'})}).catch(()=>{});
+  // #endregion
+
   const origin = window.location.origin;
   const pathBase = window.location.pathname.replace(/\/investment-sim\/?.*$/, '') || '';
   // 添加时间戳参数防止缓存
@@ -1231,23 +1287,48 @@ async function bootstrap() {
     `../data/investment-sim/stocks-futures.json${cacheBuster}`,
     `./stocks-futures.json${cacheBuster}`,
   ];
+
+  // #region agent log - urls computed
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:urls',message:'computed tryUrls',data:{origin,pathBase,tryUrls},timestamp:Date.now(),runId:'debug1',hypothesisId:'H1-path'})}).catch(()=>{});
+  // #endregion
+
   let raw = null;
+  let lastError = null;
   for (const u of tryUrls) {
     try {
+      // #region agent log - fetch attempt
+      fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:fetch',message:'fetch attempt',data:{url:u},timestamp:Date.now(),runId:'debug1',hypothesisId:'H3-404'})}).catch(()=>{});
+      // #endregion
+
       const res = await fetch(u, { cache: 'no-store' });
+
+      // #region agent log - fetch response
+      fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:response',message:'fetch response',data:{url:u,ok:res.ok,status:res.status,statusText:res.statusText},timestamp:Date.now(),runId:'debug1',hypothesisId:'H3-404'})}).catch(()=>{});
+      // #endregion
+
       if (res.ok) {
         raw = await res.json();
+        // #region agent log - success
+        fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:success',message:'fetch success',data:{url:u,hasStocks:!!raw?.stocks,hasFutures:!!raw?.futures},timestamp:Date.now(),runId:'debug1',hypothesisId:'H3-404'})}).catch(()=>{});
+        // #endregion
         break;
       }
-    } catch {
-      /* next */
+    } catch (e) {
+      // #region agent log - fetch error
+      fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:error',message:'fetch error',data:{url:u,error:e?.message||String(e),errorType:e?.name},timestamp:Date.now(),runId:'debug1',hypothesisId:'H2-cors'})}).catch(()=>{});
+      // #endregion
+      lastError = e;
     }
   }
+
+  // #region agent log - final result
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:result',message:'bootstrap result',data:{rawIsNull:raw===null,lastError:lastError?.message||null},timestamp:Date.now(),runId:'debug1',hypothesisId:'H4-error'})}).catch(()=>{});
+  // #endregion
+
+  // 如果 fetch 失败，使用内嵌配置作为备用
   if (!raw) {
-    const dock = $('#month-dock');
-    if (dock) dock.innerHTML = '';
-    $('#app').innerHTML = '<p class="hint">无法加载 stocks-futures.json</p>';
-    return;
+    console.warn('[投资公司] 无法从服务器加载 stocks-futures.json，使用内嵌默认配置');
+    raw = EMBEDDED_CONFIG;
   }
 
   const s0 = raw.stocks?.[0];
