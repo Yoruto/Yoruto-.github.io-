@@ -1,7 +1,14 @@
 import { OFFICE_GRADES, RECRUIT_COST_WAN, SEVERANCE_MONTHS_PAY } from './tables.js';
+import { randomEmployeeNameForSeed } from './rng.js';
 
 /** 仅与当前开发构建一致；不兼容旧存档 */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
+
+/** 万元精确到 0.0001（对应 1 元人民币） */
+export function roundWan(x) {
+  if (x == null || !Number.isFinite(Number(x))) return 0;
+  return Math.round(Number(x) * 10000) / 10000;
+}
 
 export function nextId(state, prefix) {
   if (typeof state.idSeq !== 'number') state.idSeq = 0;
@@ -9,11 +16,13 @@ export function nextId(state, prefix) {
   return `${prefix}${state.idSeq.toString(36)}`;
 }
 
-export function tierSalaryWan(tier, ability) {
-  const a = Math.max(1, Math.min(10, ability | 0));
-  if (tier === 'junior') return 0.3 + a * 0.05;
-  if (tier === 'mid') return 0.8 + a * 0.1;
-  return 2.0 + a * 0.2;
+/**
+ * 月薪（万）：基础 0.5，每工作满 12 个月 +0.1（与职级/能力无关）
+ */
+export function employeeMonthlySalaryWan(emp) {
+  const m = Math.max(0, emp.experienceMonths | 0);
+  const years = Math.floor(m / 12);
+  return roundWan(0.5 + 0.1 * years);
 }
 
 export function recruitTierAllowed(year, tier) {
@@ -39,9 +48,13 @@ export function trainingCostWan(abilityAfterTraining) {
 
 export function createInitialState(gameSeed) {
   const state0 = { idSeq: 0 };
+  const seed = (gameSeed >>> 0) || 1;
+  let n1 = randomEmployeeNameForSeed(seed, 0);
+  let n2 = randomEmployeeNameForSeed(seed, 1);
+  if (n1 === n2) n2 = `${n2}乙`;
   const e1 = {
     id: nextId(state0, 'e'),
-    name: 'MMZ',
+    name: n1,
     tier: 'junior',
     ability: 5,
     loyalty: 6,
@@ -50,22 +63,12 @@ export function createInitialState(gameSeed) {
     hiredThisMonth: false,
     trainingScheduled: false,
     idleStreakMonths: 0,
+    aiStyle: 'momentum',
+    lastRebalanceMonth: null,
   };
   const e2 = {
     id: nextId(state0, 'e'),
-    name: 'CCZ',
-    tier: 'junior',
-    ability: 3,
-    loyalty: 5,
-    experienceMonths: 0,
-    hiredYearMonth: { year: 1990, month: 1 },
-    hiredThisMonth: false,
-    trainingScheduled: false,
-    idleStreakMonths: 0,
-  };
-  const e3 = {
-    id: nextId(state0, 'e'),
-    name: 'HHZ',
+    name: n2,
     tier: 'junior',
     ability: 4,
     loyalty: 7,
@@ -74,6 +77,8 @@ export function createInitialState(gameSeed) {
     hiredThisMonth: false,
     trainingScheduled: false,
     idleStreakMonths: 0,
+    aiStyle: 'dividend',
+    lastRebalanceMonth: null,
   };
 
   return {
@@ -88,7 +93,7 @@ export function createInitialState(gameSeed) {
     offices: [
       { kind: 'lease', gradeId: 'small', sinceYear: 1990, sinceMonth: 1 },
     ],
-    employees: [e1, e2, e3],
+    employees: [e1, e2],
     /** 持久在营业务；滚存=reinvest 时 aumWan 按月复利 */
     activeBusinesses: [],
     /** 每条业务固定 RNG 槽位，保证可复现 */
@@ -101,13 +106,19 @@ export function createInitialState(gameSeed) {
     predictedCommodityC: 2,
     majorEffectStack: [],
     majorFiredKeys: [],
+    /** 下月随机大事件判定用概率（%），未触发时累加 5，触发后重置 5 */
+    randomMajorP: 5,
     monthLog: [],
     pendingMargin: [],
     lastSettlementResults: [],
     gameOver: false,
     gameOverReason: '',
     victory: false,
-    recruitCountThisMonth: 0,
+    talentPool: [],
+    talentPoolRefreshIndex: 0,
+    /** 0.2 月结报告弹窗 */
+    showMonthReport: false,
+    monthReportData: null,
     trainedThisMonth: false,
     trainedEmployeeId: null,
     /** P1+ 事件 */
@@ -136,7 +147,7 @@ export function getMonthlyRentTotalWan(state) {
 }
 
 export function getPayrollTotalWan(state) {
-  return state.employees.reduce((s, e) => s + tierSalaryWan(e.tier, e.ability), 0);
+  return roundWan(state.employees.reduce((s, e) => s + employeeMonthlySalaryWan(e), 0));
 }
 
 export function appendLog(state, text) {
@@ -145,7 +156,7 @@ export function appendLog(state, text) {
 }
 
 export function severanceForEmployee(emp) {
-  return tierSalaryWan(emp.tier, emp.ability) * SEVERANCE_MONTHS_PAY;
+  return roundWan(employeeMonthlySalaryWan(emp) * SEVERANCE_MONTHS_PAY);
 }
 
 export function recruitCostForTier(tier) {

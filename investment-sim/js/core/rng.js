@@ -93,6 +93,15 @@ export function majorEventTriggerH(gameSeed, monthIndex, slot) {
   return mixUint32(gameSeed >>> 0, [monthIndex, slot, 0x4d4a52]);
 }
 
+const EMP_FN = ['陈', '林', '王', '张', '刘', '杨', '赵', '黄', '周', '吴', '徐', '孙'];
+const EMP_GN = ['伟', '芳', '娜', '强', '敏', '静', '磊', '军', '洋', '勇', '艳', '杰', '丽', '涛', '明'];
+
+/** 可复现简称（与人才库风格一致） */
+export function randomEmployeeNameForSeed(gameSeed, index) {
+  const h = mixUint32((gameSeed >>> 0) || 1, [(index | 0) & 0xffff, 0x4e4d5f, 0x4e, 0x01]);
+  return `${EMP_FN[h % EMP_FN.length]}${EMP_GN[(h >>> 8) % EMP_GN.length]}`;
+}
+
 function employeeIdHash(s) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -134,4 +143,36 @@ export function generateEmployeeStockPortfolio(gameSeed, monthIndex, rngSlot, em
   }
   weights.push(rem);
   return indices.map((idx, i) => ({ stockId: stocks[idx].id, weightBp: weights[i] }));
+}
+
+/** 轻仓：仅总 AUM 的 20% 投入股票侧（与组合内 weights 合 10000 联用，见 monthEngine） */
+export const STOCK_PARTIAL_SLEEVE_BP = 2000;
+
+/**
+ * 随机 1～4 支，标的间权重合计 10000。与 `STOCK_PARTIAL_SLEEVE_BP` 联用表示全账户仅 20% 买股。
+ * @param {{id:string}[]} stocks 当前可买列表（通常已按上市日过滤）
+ */
+export function generateRandomPartialStockPortfolio(gameSeed, monthIndex, rngSlot, employeeId, stocks) {
+  const n = stocks.length;
+  if (n === 0) return [];
+  const kW = 1 + (mixUint32(gameSeed >>> 0, [monthIndex, rngSlot, employeeIdHash(employeeId), 0x504152]) % 4);
+  const k = Math.min(kW, n);
+  const avail = stocks.map((_, i) => i);
+  const indices = [];
+  let x = mixUint32(gameSeed >>> 0, [monthIndex, rngSlot, employeeIdHash(employeeId), 0x504b32]);
+  for (let i = 0; i < k; i++) {
+    x = (x * 1664525 + 1013904223) >>> 0;
+    const pick = x % avail.length;
+    indices.push(avail[pick]);
+    avail.splice(pick, 1);
+  }
+  const each = Math.floor(10000 / k);
+  let rem = 10000;
+  const rows = [];
+  for (let i = 0; i < k - 1; i++) {
+    rows.push({ stockId: stocks[indices[i]].id, weightBp: each });
+    rem -= each;
+  }
+  rows.push({ stockId: stocks[indices[k - 1]].id, weightBp: rem });
+  return rows;
 }

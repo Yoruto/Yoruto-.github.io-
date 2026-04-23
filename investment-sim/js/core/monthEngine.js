@@ -3,20 +3,23 @@ import {
   rollMacroC,
   rollPredictedC,
   majorEventTriggerH,
-  rollRecruitStats,
 } from './rng.js';
-import { settleMonthlyOrder, computePortfolioBetaExtraBp, computePortfolioSectorBp } from './settlement.js';
-import { generateEmployeeStockPortfolio } from './rng.js';
+import {
+  settleMonthlyOrder,
+  computePortfolioBetaExtraBp,
+  computePortfolioSectorBp,
+  doesStockPayDividend,
+  getStockBetaExtraBp,
+} from './settlement.js';
+import { generateRandomPartialStockPortfolio, STOCK_PARTIAL_SLEEVE_BP } from './rng.js';
 import {
   appendLog,
   getMonthlyRentTotalWan,
   getPayrollTotalWan,
   getTotalCapacity,
   nextId,
-  recruitCostForTier,
-  recruitTierAllowed,
   severanceForEmployee,
-  tierSalaryWan,
+  roundWan,
   trainingCostWan,
   canPromote,
   SCHEMA_VERSION,
@@ -24,17 +27,16 @@ import {
 import {
   OFFICE_GRADES,
   LEASE_DEPOSIT_RETURN_RATIO,
+  getEmployeeMaxAumWan,
 } from './tables.js';
+import { buildMonthReportData } from './monthReport.js';
+import { buildAiStockPortfolio, REBALANCE_INTERVAL_MONTHS } from './employeeAI.js';
 import {
   pushDueMajorEvents,
   applyMajorStackToC,
   tickMajorStack,
   rollMinorEvent,
 } from './events.js';
-
-function round1(x) {
-  return Math.round(x * 10) / 10;
-}
 
 function compareYm(a, y, m) {
   if (a.year !== y) return a.year - y;
@@ -63,13 +65,13 @@ export function runMonthOpening(state) {
   if (state.month === 1) {
     for (const o of state.offices) {
       if (o.kind === 'owned' && o.purchasePriceWan) {
-        tax += round1(o.purchasePriceWan * (OFFICE_GRADES[o.gradeId]?.propertyTaxRate ?? 0));
+        tax += roundWan(o.purchasePriceWan * (OFFICE_GRADES[o.gradeId]?.propertyTaxRate ?? 0));
       }
     }
   }
 
-  const mustPay = round1(payroll + rent + tax);
-  state.companyCashWan = round1(state.companyCashWan);
+  const mustPay = roundWan(payroll + rent + tax);
+  state.companyCashWan = roundWan(state.companyCashWan);
   if (state.companyCashWan < mustPay - 1e-9) {
     state.gameOver = true;
     state.gameOverReason = `现金不足以支付刚性支出（工资+租金+税 ${mustPay} 万）。`;
@@ -78,10 +80,13 @@ export function runMonthOpening(state) {
     return;
   }
 
-  state.companyCashWan = round1(state.companyCashWan - mustPay);
+  // 记录月初现金（扣款前，用于月度报告计算）
+  state._monthStartCashWan = roundWan(state.companyCashWan);
+
+  state.companyCashWan = roundWan(state.companyCashWan - mustPay);
   appendLog(
     state,
-    `【月初扣款】工资 ${round1(payroll)} 万，写字楼支出 ${round1(rent + tax)} 万（含物业税 ${round1(tax)} 万）。`,
+    `【月初扣款】工资 ${roundWan(payroll)} 万，写字楼支出 ${roundWan(rent + tax)} 万（含物业税 ${roundWan(tax)} 万）。`,
   );
 
   const idx = ymToMonthIndex(state.year, state.month);
@@ -117,10 +122,17 @@ export function addActiveBusiness(state, orderDraft, config) {
   const alloc = Number(orderDraft.allocWan);
   if (!Number.isFinite(alloc) || alloc <= 0) return { ok: false, error: '金额无效' };
 
+  const maxByTier = getEmployeeMaxAumWan(emp);
   if (orderDraft.kind === 'stock') {
-    if (alloc < 1 || alloc > 100) return { ok: false, error: '股票调拨须在 1~100 万' };
+    const cap = Math.min(100, maxByTier);
+    if (alloc < 1 || alloc > cap) {
+      return { ok: false, error: `股票调拨须在 1~${cap} 万（该员工等级与规则上限取低）` };
+    }
   } else {
-    if (alloc < 1 || alloc > 50) return { ok: false, error: '期货调拨须在 1~50 万' };
+    const cap = Math.min(50, maxByTier);
+    if (alloc < 1 || alloc > cap) {
+      return { ok: false, error: `期货调拨须在 1~${cap} 万（该员工等级与规则上限取低）` };
+    }
   }
 
   if (state.companyCashWan + 1e-9 < alloc) return { ok: false, error: '公司现金不足' };
@@ -141,17 +153,51 @@ export function addActiveBusiness(state, orderDraft, config) {
   const rngOrderSlot = state.businessRngSlotSeq;
   state.businessRngSlotSeq += 1;
 
-  const stockList = config?.stocks?.length ? config.stocks : [];
-  const stockPortfolio =
-    orderDraft.kind === 'stock'
-      ? generateEmployeeStockPortfolio(
+  const stockList = (config?.stocks || []).filter((s) => listingOk(s.listingYearMonth, state.year, state.month));
+  const listForRandom = stockList.length ? stockList : config?.stocks || [];
+  const miOpen = ymToMonthIndex(state.year, state.month);
+  const SLEEVE_FULL = 10000;
+  let stockPortfolio = [];
+  /** 10000=组合代表 100% AUM；轻仓 2000=仅 20% 参与股票收益与持仓 */
+  let stockSleeveBp = SLEEVE_FULL;
+  if (orderDraft.kind === 'stock') {
+    const hasAi = emp.aiStyle && ['momentum', 'trend', 'dividend'].includes(emp.aiStyle);
+    if (hasAi) {
+      const aiPort = buildAiStockPortfolio(
+        state.gameSeed,
+        state.year,
+        state.month,
+        emp.aiStyle,
+        stockList.length ? stockList : config.stocks,
+        config.sectors || [],
+      );
+      if (aiPort.length) {
+        stockPortfolio = aiPort;
+        stockSleeveBp = SLEEVE_FULL;
+      } else {
+        stockPortfolio = generateRandomPartialStockPortfolio(
           state.gameSeed,
-          ymToMonthIndex(state.year, state.month),
+          miOpen,
           rngOrderSlot,
           emp.id,
-          stockList,
-        )
-      : [];
+          listForRandom,
+        );
+        stockSleeveBp = STOCK_PARTIAL_SLEEVE_BP;
+      }
+    } else {
+      stockPortfolio = generateRandomPartialStockPortfolio(
+        state.gameSeed,
+        miOpen,
+        rngOrderSlot,
+        emp.id,
+        listForRandom,
+      );
+      stockSleeveBp = STOCK_PARTIAL_SLEEVE_BP;
+    }
+  }
+  if (orderDraft.kind === 'stock' && !stockPortfolio.length) {
+    stockSleeveBp = 0;
+  }
 
   const id = nextId(state, 'b');
   state.activeBusinesses.push({
@@ -163,23 +209,31 @@ export function addActiveBusiness(state, orderDraft, config) {
     profitPolicy,
     stockId: null,
     stockPortfolio,
+    stockSleeveBp,
     futuresVariantId,
     stockGuideMode,
     leverage,
     rngOrderSlot,
   });
 
-  state.companyCashWan = round1(state.companyCashWan - alloc);
+  state.companyCashWan = roundWan(state.companyCashWan - alloc);
 
   const polLabel = profitPolicy === 'reinvest' ? '滚存复利' : '上交公司';
+  const sleeveHint =
+    orderDraft.kind === 'stock' && (stockSleeveBp ?? SLEEVE_FULL) < SLEEVE_FULL
+      ? ` 股票仓 ${((stockSleeveBp ?? SLEEVE_FULL) / 100).toFixed(0)}%`
+      : '';
   const portHint =
     orderDraft.kind === 'stock' && stockPortfolio.length
-      ? ` 组合：${stockPortfolio.map((p) => `${p.stockId}:${(p.weightBp / 100).toFixed(1)}%`).join(' ')}`
+      ? ` 组合：${stockPortfolio.map((p) => `${p.stockId}:${(p.weightBp / 100).toFixed(1)}%`).join(' ')}${sleeveHint}`
       : '';
   appendLog(
     state,
     `【开业】${emp.name} ${orderDraft.kind === 'stock' ? '股票' : '期货'} 本金 ${alloc} 万 · ${polLabel}${portHint}。`,
   );
+  if (orderDraft.kind === 'stock' && stockPortfolio.length) {
+    emp.lastRebalanceMonth = miOpen;
+  }
   return { ok: true };
 }
 
@@ -204,7 +258,7 @@ export function applyGuidance(state, businessId, patch, config) {
   let aumDelta = 0;
   if (patch.aumDeltaWan != null && patch.aumDeltaWan !== '') {
     const d = Number(patch.aumDeltaWan);
-    if (Number.isFinite(d)) aumDelta = round1(d);
+    if (Number.isFinite(d)) aumDelta = roundWan(d);
   }
   const hasAum = Math.abs(aumDelta) > 1e-9;
 
@@ -255,23 +309,32 @@ export function applyGuidance(state, businessId, patch, config) {
     if (aumDelta > 0) {
       if (state.companyCashWan + 1e-9 < aumDelta) return { ok: false, error: '公司现金不足，无法增资' };
     } else {
-      const out = round1(-aumDelta);
-      const nextAum = round1(b.aumWan - out);
+      const out = roundWan(-aumDelta);
+      const nextAum = roundWan(b.aumWan - out);
       if (nextAum + 1e-9 < GUIDE_MIN_AUM_WAN) {
         return { ok: false, error: `减资后 AUM 须不少于 ${GUIDE_MIN_AUM_WAN} 万` };
       }
       if (b.profitPolicy === 'remit') {
-        const nextInit = round1(b.initialWan - out);
+        const nextInit = roundWan(b.initialWan - out);
         if (nextInit + 1e-9 < GUIDE_MIN_AUM_WAN) {
           return { ok: false, error: `减资后上交本金须不少于 ${GUIDE_MIN_AUM_WAN} 万` };
         }
       }
     }
-    state.companyCashWan = round1(state.companyCashWan - aumDelta);
-    b.aumWan = round1(b.aumWan + aumDelta);
-    if (b.profitPolicy === 'remit') b.initialWan = round1(b.initialWan + aumDelta);
+    const emp0 = state.employees.find((e) => e.id === b.employeeId);
+    if (emp0) {
+      const testAum = roundWan(b.aumWan + aumDelta);
+      const cap =
+        b.kind === 'fut' ? Math.min(50, getEmployeeMaxAumWan(emp0)) : Math.min(100, getEmployeeMaxAumWan(emp0));
+      if (testAum - cap > 1e-9) {
+        return { ok: false, error: `增资后 AUM 不可超过该员工管理上限（${cap} 万）` };
+      }
+    }
+    state.companyCashWan = roundWan(state.companyCashWan - aumDelta);
+    b.aumWan = roundWan(b.aumWan + aumDelta);
+    if (b.profitPolicy === 'remit') b.initialWan = roundWan(b.initialWan + aumDelta);
     changed = true;
-    detailParts.push(aumDelta > 0 ? `增资${aumDelta}万` : `减资${round1(-aumDelta)}万`);
+    detailParts.push(aumDelta > 0 ? `增资${aumDelta}万` : `减资${roundWan(-aumDelta)}万`);
   }
 
   if (!changed) return { ok: false, error: '与当前设置相同，未消耗指导' };
@@ -293,8 +356,8 @@ export function closeActiveBusiness(state, businessId) {
   const b = state.activeBusinesses[i];
   const emp = state.employees.find((e) => e.id === b.employeeId);
   const name = emp?.name || '';
-  const back = round1(b.aumWan);
-  state.companyCashWan = round1(state.companyCashWan + back);
+  const back = roundWan(b.aumWan);
+  state.companyCashWan = roundWan(state.companyCashWan + back);
   state.activeBusinesses.splice(i, 1);
   appendLog(state, `【结业】${name} 业务结束，收回 ${back} 万。`);
   return { ok: true };
@@ -323,6 +386,83 @@ export function removeMonthOrder(state, orderId) {
   return { ok: false, error: '请使用结业关闭持久业务' };
 }
 
+/**
+ * 月结后、经验结算前：**月分红**（年股息率 ÷ 12，按持仓月计提，仅成熟期派息）
+ * 成长期不派；复利策略下分红滚入 AUM，上交策略下进公司现金。
+ */
+function settleDividends(state, config) {
+  let total = 0;
+  const currentYear = state.year;
+  /** @type {{ businessId: string, employeeName: string, amountWan: number }[]} */
+  const breakdown = [];
+  for (const ord of state.activeBusinesses) {
+    if (ord.kind !== 'stock' || !ord.stockPortfolio?.length) continue;
+    let forOrd = 0;
+    for (const leg of ord.stockPortfolio) {
+      const st = (config.stocks || []).find((s) => s.id === leg.stockId);
+      if (!st) continue;
+      if (!doesStockPayDividend(st, currentYear)) continue;
+      const annual = Number(st.dividendRateAnnual) || 0;
+      if (annual <= 0) continue;
+      const monRate = annual / 12;
+      const sleeve = Math.max(0, Math.min(10000, ord.stockSleeveBp ?? 10000));
+      const w = (sleeve / 10000) * ((leg.weightBp | 0) / 10000);
+      const pos = roundWan(ord.aumWan * w);
+      const cash = roundWan(pos * monRate);
+      if (cash <= 0) continue;
+      forOrd = roundWan(forOrd + cash);
+      total = roundWan(total + cash);
+      if (ord.profitPolicy === 'reinvest') {
+        ord.aumWan = roundWan(ord.aumWan + cash);
+      } else {
+        state.companyCashWan = roundWan(state.companyCashWan + cash);
+      }
+    }
+    if (forOrd > 0) {
+      const emp = state.employees.find((e) => e.id === ord.employeeId);
+      breakdown.push({ businessId: ord.id, employeeName: emp?.name || '—', amountWan: forOrd });
+    }
+  }
+  if (total > 0) {
+    appendLog(state, `【月分红】本月股票持仓月分红（年息÷12 计提）合计 ${roundWan(total)} 万。`);
+  }
+  state._lastDividendTotalWan = roundWan(total);
+  state._lastDividendBreakdown = breakdown;
+}
+
+/**
+ * 季度调仓：有 aiStyle 的负责人员工，满足间隔后重建组合
+ */
+function runEmployeeAiRebalance(state, config) {
+  if (!config?.stocks?.length) return;
+  const mi = ymToMonthIndex(state.year, state.month);
+  for (const b of state.activeBusinesses) {
+    if (b.kind !== 'stock') continue;
+    const emp = state.employees.find((e) => e.id === b.employeeId);
+    if (!emp || !['momentum', 'trend', 'dividend'].includes(emp.aiStyle)) continue;
+    const last = emp.lastRebalanceMonth;
+    if (last == null) {
+      emp.lastRebalanceMonth = mi;
+      continue;
+    }
+    if (mi - last < REBALANCE_INTERVAL_MONTHS) continue;
+    const port = buildAiStockPortfolio(
+      state.gameSeed,
+      state.year,
+      state.month,
+      emp.aiStyle,
+      config.stocks,
+      config.sectors || [],
+    );
+    if (port.length) {
+      b.stockPortfolio = port;
+      b.stockSleeveBp = 10000;
+      emp.lastRebalanceMonth = mi;
+      appendLog(state, `【AI 调仓】${emp.name} 已按「${emp.aiStyle}」更新组合。`);
+    }
+  }
+}
+
 export function runSettlement(state, config) {
   const monthIndex = ymToMonthIndex(state.year, state.month);
   state.lastSettlementResults = [];
@@ -335,17 +475,25 @@ export function runSettlement(state, config) {
     if (!emp) continue;
 
     const allocForSettle =
-      ord.profitPolicy === 'remit' ? ord.initialWan : round1(ord.aumWan);
+      ord.profitPolicy === 'remit' ? ord.initialWan : roundWan(ord.aumWan);
     if (allocForSettle <= 0) continue;
 
     let portfolioBetaBp = 0;
     let portfolioSectorBp = 0;
     if (ord.kind === 'stock') {
-      portfolioBetaBp = computePortfolioBetaExtraBp(ord.stockPortfolio, config.stocks);
+      // 传入当前年份、gameSeed、monthIndex 以支持成长股/成熟股的动态 beta
+      portfolioBetaBp = computePortfolioBetaExtraBp(
+        ord.stockPortfolio,
+        config.stocks,
+        state.year,
+        state.gameSeed,
+        monthIndex,
+      );
       portfolioSectorBp = computePortfolioSectorBp(ord.stockPortfolio, config.stocks, config.sectors);
       if ((!ord.stockPortfolio || ord.stockPortfolio.length === 0) && ord.stockId) {
         const st = config.stocks.find((s) => s.id === ord.stockId);
-        portfolioBetaBp = st?.betaExtraBp ?? 0;
+        // 使用 getStockBetaExtraBp 来获取当前年份的 beta（成长期/成熟期）
+        portfolioBetaBp = getStockBetaExtraBp(st, state.year, state.gameSeed, monthIndex);
         const sec = config.sectors?.find((s) => s.id === st?.sectorId);
         portfolioSectorBp = sec?.sectorBetaBp ?? 0;
       }
@@ -373,15 +521,17 @@ export function runSettlement(state, config) {
       betaExtraBp: 0,
       futBpByC: futRow,
       leverage: ord.leverage,
+      stockSleeveWeightBp: ord.kind === 'stock' ? (ord.stockSleeveBp ?? 10000) : undefined,
     });
 
-    const postVal = round1(allocForSettle + profitWan);
+    const postVal = roundWan(allocForSettle + profitWan);
     const polLabel = ord.profitPolicy === 'reinvest' ? '滚存复利' : '上交公司';
 
     state.lastSettlementResults.push({
       businessId: ord.id,
       employeeId: emp.id,
       employeeName: emp.name,
+      kind: ord.kind,
       P,
       profitWan,
       success,
@@ -411,8 +561,8 @@ export function runSettlement(state, config) {
         `【月结·复利】${emp.name} ${ord.kind === 'stock' ? '股票' : '期货'} P=${(P / 100).toFixed(2)}% 净利 ${profitWan} 万 → AUM ${ord.aumWan} 万。`,
       );
     } else {
-      state.companyCashWan = round1(state.companyCashWan + profitWan);
-      ord.aumWan = round1(ord.initialWan);
+      state.companyCashWan = roundWan(state.companyCashWan + profitWan);
+      ord.aumWan = roundWan(ord.initialWan);
       appendLog(
         state,
         `【月结·上交】${emp.name} ${ord.kind === 'stock' ? '股票' : '期货'} P=${(P / 100).toFixed(2)}% 净利 ${profitWan} 万 → 划入公司；业务本金维持 ${ord.initialWan} 万。`,
@@ -424,6 +574,9 @@ export function runSettlement(state, config) {
       appendLog(state, `【经验】${emp.name} 业务成功，经验 +3。`);
     }
   }
+
+  settleDividends(state, config);
+  runEmployeeAiRebalance(state, config);
 
   for (const emp of state.employees) {
     emp.experienceMonths += 1;
@@ -443,17 +596,48 @@ export function runSettlement(state, config) {
 export function closeMonthAndAdvance(state) {
   if (state.gameOver || state.victory) return;
 
+  const closedY = state.year;
+  const closedM = state.month;
+  const majorSnap = JSON.parse(JSON.stringify(state.majorEffectStack || []));
+  const divTotal = state._lastDividendTotalWan ?? 0;
+  const divBreakSnap = JSON.parse(JSON.stringify(state._lastDividendBreakdown || []));
+  const settleSnap = (state.lastSettlementResults || []).map((r) => ({ ...r }));
+
+  // 记录公司财务数据（用于月度报告）
+  const payrollTotal = getPayrollTotalWan(state);
+  const rentTotal = getMonthlyRentTotalWan(state);
+  const cashStart = state._monthStartCashWan ?? state.companyCashWan;
+  const cashEnd = state.companyCashWan;
+
   checkResignations(state);
   tickMajorStack(state);
   rollMinorEvent(state, ymToMonthIndex(state.year, state.month), state.allowMinorEventThisMonth !== false);
   if (state.minorEventNote) appendLog(state, state.minorEventNote);
 
+  state.monthReportData = buildMonthReportData({
+    closedYear: closedY,
+    closedMonth: closedM,
+    majorStackSnapshot: majorSnap,
+    minorEventNote: state.minorEventNote,
+    settlementResults: settleSnap,
+    dividendTotalWan: divTotal,
+    dividendBreakdown: divBreakSnap,
+    payrollTotalWan: payrollTotal,
+    rentTotalWan: rentTotal,
+    companyCashStartWan: cashStart,
+    companyCashEndWan: cashEnd,
+  });
+  state.showMonthReport = true;
+
   advanceCalendar(state);
-  if (state.victory) return;
+  if (state.victory) {
+    state.showMonthReport = false;
+    state.monthReportData = null;
+    return;
+  }
 
   state.guidanceRemaining = 1;
   state.monthOrders = [];
-  state.recruitCountThisMonth = 0;
   state.trainedThisMonth = false;
   state.trainedEmployeeId = null;
   state.majorEventNote = '';
@@ -464,9 +648,16 @@ export function closeMonthAndAdvance(state) {
 }
 
 /** 点击「下月」：先月结，无透支则翻月并自动月初 */
+export function dismissMonthReport(state) {
+  if (state) {
+    state.showMonthReport = false;
+  }
+}
+
 export function endTurn(state, config) {
   if (state.gameOver || state.victory) return { ok: false, error: '游戏已结束' };
   if (state.pendingMargin.length) return { ok: false, error: '请先处理业务透支' };
+  if (state.showMonthReport) return { ok: false, error: '请先阅毕月度报告' };
 
   runSettlement(state, config);
   if (state.pendingMargin.length) {
@@ -484,15 +675,15 @@ export function resolveMargin(state, businessId, action, extraPayWan) {
   const biz = state.activeBusinesses.find((b) => b.id === businessId);
 
   if (action === 'topup') {
-    const need = round1(-m.balance);
+    const need = roundWan(-m.balance);
     const pay = Math.max(need, Number(extraPayWan) || need);
     if (state.companyCashWan + 1e-9 < pay) return { ok: false, error: '现金不足' };
-    state.companyCashWan = round1(state.companyCashWan - pay);
-    const newAum = round1(m.balance + pay);
+    state.companyCashWan = roundWan(state.companyCashWan - pay);
+    const newAum = roundWan(m.balance + pay);
     if (biz) biz.aumWan = Math.max(0, newAum);
     appendLog(state, `【续资】为 ${m.employeeName} 补足 ${pay} 万透支${biz ? `，业务 AUM=${biz.aumWan} 万` : ''}。`);
   } else {
-    state.companyCashWan = round1(state.companyCashWan + m.balance);
+    state.companyCashWan = roundWan(state.companyCashWan + m.balance);
     state.reputation = Math.max(0, state.reputation - 3);
     if (biz) {
       const bi = state.activeBusinesses.findIndex((b) => b.id === businessId);
@@ -510,37 +701,6 @@ export function resolveMargin(state, businessId, action, extraPayWan) {
   return { ok: true };
 }
 
-export function runRecruit(state, tier) {
-  if (!recruitTierAllowed(state.year, tier)) return { ok: false, error: '该职级此年代不可招聘' };
-  const cap = getTotalCapacity(state);
-  if (state.employees.length >= cap) return { ok: false, error: '容量已满' };
-  const cost = recruitCostForTier(tier);
-  if (state.companyCashWan + 1e-9 < cost) return { ok: false, error: '现金不足' };
-
-  const slot = state.recruitCountThisMonth;
-  const stats = rollRecruitStats(state.gameSeed, ymToMonthIndex(state.year, state.month), slot);
-
-  state.companyCashWan = round1(state.companyCashWan - cost);
-  state.recruitCountThisMonth += 1;
-
-  const tierKey = tier === 'junior' ? 'junior' : tier === 'mid' ? 'mid' : 'senior';
-  const name = `新人${state.recruitCountThisMonth}`;
-  state.employees.push({
-    id: nextId(state, 'e'),
-    name,
-    tier: tierKey,
-    ability: stats.ability,
-    loyalty: stats.loyalty,
-    experienceMonths: 0,
-    hiredYearMonth: { year: state.year, month: state.month },
-    hiredThisMonth: true,
-    trainingScheduled: false,
-    idleStreakMonths: 0,
-  });
-  appendLog(state, `【招聘】${name}（${tierKey}）能力${stats.ability} 忠诚${stats.loyalty}，费用 ${cost} 万。`);
-  return { ok: true };
-}
-
 export function runTrain(state, employeeId) {
   if (state.trainedThisMonth) return { ok: false, error: '本月培训名额已用' };
   const emp = state.employees.find((e) => e.id === employeeId);
@@ -552,7 +712,7 @@ export function runTrain(state, employeeId) {
   const cost = trainingCostWan(nextAb);
   if (state.companyCashWan + 1e-9 < cost) return { ok: false, error: '现金不足' };
 
-  state.companyCashWan = round1(state.companyCashWan - cost);
+  state.companyCashWan = roundWan(state.companyCashWan - cost);
   emp.ability = nextAb;
   state.trainedThisMonth = true;
   state.trainedEmployeeId = emp.id;
@@ -604,7 +764,7 @@ export function runFireEmployee(state, employeeId, config) {
   }
 
   // 执行开除
-  state.companyCashWan = round1(state.companyCashWan - sev);
+  state.companyCashWan = roundWan(state.companyCashWan - sev);
   state.employees.splice(empIndex, 1);
   appendLog(state, `【开除】${emp.name}（${emp.tier}·能力${emp.ability}）遣散费 ${sev} 万。`);
   return { ok: true };
@@ -634,15 +794,15 @@ export function runReleaseLease(state, officeIndex) {
     return { ok: false, error: '保留至少一间基础办公空间' };
   }
   const g = OFFICE_GRADES[o.gradeId];
-  const refund = round1(g.monthlyRentWan * LEASE_DEPOSIT_RETURN_RATIO);
-  state.companyCashWan = round1(state.companyCashWan + refund);
+  const refund = roundWan(g.monthlyRentWan * LEASE_DEPOSIT_RETURN_RATIO);
+  state.companyCashWan = roundWan(state.companyCashWan + refund);
 
   state.offices.splice(officeIndex, 1);
   const cap = getTotalCapacity(state);
   while (state.employees.length > cap) {
     const victim = state.employees[state.employees.length - 1];
     const sev = severanceForEmployee(victim);
-    state.companyCashWan = round1(state.companyCashWan - sev);
+    state.companyCashWan = roundWan(state.companyCashWan - sev);
     appendLog(state, `【裁员】${victim.name} 遣散费 ${sev} 万。`);
     state.employees.pop();
   }
@@ -658,7 +818,7 @@ export function runPurchaseOffice(state, gradeId) {
   const price = g.purchasePriceWan;
   if (state.companyCashWan + 1e-9 < price) return { ok: false, error: '现金不足' };
 
-  state.companyCashWan = round1(state.companyCashWan - price);
+  state.companyCashWan = roundWan(state.companyCashWan - price);
   state.offices.push({
     kind: 'owned',
     gradeId,
@@ -677,15 +837,15 @@ export function runSellOwnedOffice(state, officeIndex) {
   const heldMonths =
     (state.year - o.sinceYear) * 12 + (state.month - o.sinceMonth);
   const dep = Math.max(0.5, 1 - heldMonths * 0.002);
-  const price = round1((o.purchasePriceWan || g.purchasePriceWan) * dep);
-  state.companyCashWan = round1(state.companyCashWan + price);
+  const price = roundWan((o.purchasePriceWan || g.purchasePriceWan) * dep);
+  state.companyCashWan = roundWan(state.companyCashWan + price);
   state.offices.splice(officeIndex, 1);
 
   const cap = getTotalCapacity(state);
   while (state.employees.length > cap) {
     const victim = state.employees[state.employees.length - 1];
     const sev = severanceForEmployee(victim);
-    state.companyCashWan = round1(state.companyCashWan - sev);
+    state.companyCashWan = roundWan(state.companyCashWan - sev);
     appendLog(state, `【裁员】${victim.name} 遣散费 ${sev} 万。`);
     state.employees.pop();
   }

@@ -6,8 +6,19 @@ import {
   getTotalCapacity,
   canPromote,
   SCHEMA_VERSION,
+  recruitCostForTier,
 } from './core/state.js';
-import { SENTIMENT_LABELS, SENTIMENT_ICONS, STOCK_GUIDE_LABELS, OFFICE_GRADES, B_STOCK_BP_BY_C, B_FUT_BP_BY_C } from './core/tables.js';
+import {
+  SENTIMENT_LABELS,
+  SENTIMENT_ICONS,
+  STOCK_GUIDE_LABELS,
+  OFFICE_GRADES,
+  B_STOCK_BP_BY_C,
+  B_FUT_BP_BY_C,
+  getEmployeeMaxAumWan,
+} from './core/tables.js';
+import { AI_STYLES } from './core/employeeAI.js';
+import { runRefreshTalentPool, runHireFromTalent, TALENT_REFRESH_COST_WAN } from './core/talentPool.js';
 import {
   runMonthOpening,
   addActiveBusiness,
@@ -16,7 +27,7 @@ import {
   applyGuidance,
   endTurn,
   resolveMargin,
-  runRecruit,
+  dismissMonthReport,
   runTrain,
   runPromote,
   runFireEmployee,
@@ -53,8 +64,97 @@ function sentimentText(c) {
   return `${SENTIMENT_ICONS[i]} ${SENTIMENT_LABELS[i]}（c=${i}）`;
 }
 
+/** 万元显示：与 roundWan 一致，精确到 0.0001 万（1 元） */
 function formatMoney(x) {
-  return `${Math.round(x * 10) / 10} 万`;
+  if (x == null || !Number.isFinite(Number(x))) return '—';
+  const v = Math.round(Number(x) * 10000) / 10000;
+  return `${parseFloat(v.toFixed(4))} 万`;
+}
+
+/** 月度报告弹窗（已结束月份） */
+function renderMonthReportModal(data) {
+  const y = data.closedYear;
+  const m = data.closedMonth;
+  const majorHtml =
+    data.majorStack && data.majorStack.length
+      ? `<ul style="margin:0.5rem 0;padding-left:1.2rem;">${data.majorStack
+          .map(
+            (e) =>
+              `<li><strong>${escapeHtml(e.title || e.id)}</strong>（剩余 ${e.monthsLeft != null ? e.monthsLeft : 0} 月）股市c=${e.equityC ?? '—'} 大宗c=${e.commodityC ?? '—'}</li>`,
+          )
+          .join('')}</ul>`
+      : '<p class="hint" style="margin:0.5rem 0;">当前无持续中的大事件叠加（或已结束）。</p>';
+  const hasDiv = (data.dividendTotalWan || 0) > 0;
+  const divHint = hasDiv
+    ? '<div style="font-size:0.75rem;color:#c9a227;margin-top:0.25rem;">年股息率按 12 个月均摊，每月按持仓计提一次（月分红）。</div>'
+    : '';
+  const rows =
+    (data.rows || [])
+      .map((r) => {
+        const kind = r.kind === 'fut' ? '期货' : '股票';
+        const ok = r.success ? '成功' : '未达正收益';
+        const dWan = r.dividendWan != null ? r.dividendWan : 0;
+        const divCell = r.kind === 'stock' ? formatMoney(dWan) : '—';
+        return `<tr><td>${escapeHtml(r.employeeName)}</td><td>${kind}</td><td>${(r.P / 100).toFixed(2)}%</td><td>${formatMoney(
+          r.profitWan
+        )}</td><td>${divCell}</td><td>${ok}</td></tr>`;
+      })
+      .join('') || '<tr><td colspan="6" class="hint">无在营业务结算</td></tr>';
+
+  // 公司盈亏汇总
+  const incomeSection = `
+    <div style="background:#2a3d22;border:1px solid #5e4b34;border-radius:0.75rem;padding:0.75rem;margin:0.75rem 0;">
+      <h4 style="margin:0 0 0.5rem 0;color:#ffeaac;font-size:0.9rem;">公司盈亏汇总</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;font-size:0.85rem;">
+        <div><span style="color:#ac9e7e;">月初现金：</span>${formatMoney(data.companyCashStartWan || 0)}</div>
+        <div><span style="color:#ac9e7e;">月末现金：</span>${formatMoney(data.companyCashEndWan || 0)}</div>
+        <div><span style="color:#7fff7f;">收入项：</span></div>
+        <div></div>
+        <div style="padding-left:1rem;">· 交易利润 ${formatMoney(data.tradingProfitWan || 0)}</div>
+        <div style="padding-left:1rem;">· 月分红收入 ${
+          hasDiv ? formatMoney(data.dividendTotalWan || 0) : formatMoney(0)
+        }${hasDiv ? '（年息÷12）' : ''}</div>
+        ${divHint}
+        <div style="padding-left:1rem;color:#ac9e7e;">收入合计 <strong style="color:#ffd966;">${formatMoney(data.incomeTotalWan || 0)}</strong>（含交易+月分红）</div>
+        <div></div>
+        <div><span style="color:#ff7f7f;">支出项：</span></div>
+        <div></div>
+        <div style="padding-left:1rem;">· 工资支出 ${formatMoney(data.payrollTotalWan || 0)}</div>
+        <div style="padding-left:1rem;">· 写字楼支出 ${formatMoney(data.rentTotalWan || 0)}</div>
+        <div style="padding-left:1rem;color:#ac9e7e;">支出合计 <strong style="color:#ff7f7f;">${formatMoney(data.expenseTotalWan || 0)}</strong></div>
+        <div></div>
+        <div style="padding-left:1rem;color:#ac9e7e;">净变动 <strong style="color:${(data.netChangeWan || 0) >= 0 ? '#7fff7f' : '#ff7f7f'};">${formatMoney(data.netChangeWan || 0)}</strong></div>
+        <div></div>
+      </div>
+    </div>
+  `;
+
+  return `
+    <div class="month-report-overlay" id="month-report-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card">
+        <h2 class="section-title" style="margin-top:0;">月度报告 · ${y}年${m}月</h2>
+        <h3 class="section-title" style="font-size:0.95rem;">大事件（持续中，按 tick 前快照）</h3>
+        ${majorHtml}
+        <h3 class="section-title" style="font-size:0.95rem;">当月事件</h3>
+        <p style="white-space:pre-wrap;">${escapeHtml(String(data.minorEvent || '—'))}</p>
+        ${incomeSection}
+        <h3 class="section-title" style="font-size:0.95rem;">业务与交易明细</h3>
+        <p class="hint" style="margin:0.25rem 0 0.5rem 0;">月收益率为交易侧；股票业务另列月分红（成熟股权益、年股息按月计提）。</p>
+        <table class="data-table">
+          <thead><tr><th>员工</th><th>类型</th><th>月收益率</th><th>交易净利(万)</th><th>月分红(万)</th><th>结果</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <button type="button" class="primary" data-action="dismiss-month-report">关闭并继续经营</button>
+      </div>
+    </div>`;
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function portfolioSummary(b) {
@@ -66,88 +166,6 @@ function portfolioSummary(b) {
       return `${name} ${(p.weightBp / 100).toFixed(1)}%`;
     })
     .join(' · ');
-}
-
-function renderHrPanel() {
-  const tiers =
-    state.year >= 2006 ? ['junior', 'mid', 'senior'] : state.year >= 1996 ? ['junior', 'mid'] : ['junior'];
-  const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
-  const officeOpts = ['standard', 'business', 'hq'].filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear);
-  const prom = state.employees.filter((e) => canPromote(e));
-  const trainCandidates = state.employees.filter((e) => {
-    if (state.trainedThisMonth) return false;
-    if (e.ability >= 10) return false;
-    return !hasActiveBusiness(state, e.id);
-  });
-
-  const leaseRows = state.offices
-    .map((o, i) => {
-      const g = OFFICE_GRADES[o.gradeId];
-      const tag = o.kind === 'owned' ? '自有' : '租赁';
-      const fee =
-        o.kind === 'lease' ? `租 ${g.monthlyRentWan}万/月` : `购入 ${o.purchasePriceWan}万 · 税1%/年`;
-      return `<tr><td>${i}</td><td>${g.name}</td><td>${tag}</td><td>+${g.capacity}</td><td>${fee}</td><td>${
-        o.kind === 'lease'
-          ? `<button type="button" class="small danger" data-action="release-lease" data-idx="${i}">退租</button>`
-          : `<button type="button" class="small danger" data-action="sell-owned" data-idx="${i}">出售</button>`
-      }</td></tr>`;
-    })
-    .join('');
-
-  return `
-    <div class="panel">
-      <h2 class="section-title">人事与写字楼</h2>
-      <div class="flex-row" style="margin-bottom:0.75rem; gap:1rem;">
-        <div>
-          <span class="hint">招聘</span><br/>
-          <select id="hr-tier">${tiers.map((t) => `<option value="${t}">${tierLabels[t]}</option>`).join('')}</select>
-          <button type="button" data-action="recruit">招聘</button>
-        </div>
-        <div>
-          <span class="hint">培训（1人次/月）</span><br/>
-          <select id="hr-train">${state.employees
-            .map((e) => {
-              const ok = trainCandidates.some((x) => x.id === e.id);
-              return `<option value="${e.id}" ${ok ? '' : 'disabled'}>${e.name} 能${e.ability}</option>`;
-            })
-            .join('')}</select>
-          <button type="button" data-action="train">培训</button>
-        </div>
-        <div>
-          <span class="hint">晋升</span><br/>
-          <select id="hr-prom">${state.employees
-            .map((e) => {
-              const ok = prom.some((x) => x.id === e.id);
-              return `<option value="${e.id}" ${ok ? '' : 'disabled'}>${e.name}</option>`;
-            })
-            .join('')}</select>
-          <button type="button" data-action="promote">晋升</button>
-        </div>
-      </div>
-      <table class="data-table"><thead><tr><th>#</th><th>写字楼</th><th>类型</th><th>容量</th><th>费用</th><th></th></tr></thead>
-      <tbody>${leaseRows}</tbody></table>
-      <div class="flex-row" style="margin-top:0.5rem;">
-        <select id="hr-lease-grade">${officeOpts
-          .map((gid) => {
-            const g = OFFICE_GRADES[gid];
-            return `<option value="${gid}">租 ${g.name} +${g.capacity}人 / ${g.monthlyRentWan}万</option>`;
-          })
-          .join('')}</select>
-        <button type="button" data-action="lease">租赁</button>
-        ${
-          state.year >= 2010
-            ? `<select id="hr-buy-grade">${['standard', 'business', 'hq']
-                .filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear)
-                .map((gid) => {
-                  const g = OFFICE_GRADES[gid];
-                  return `<option value="${gid}">购 ${g.name} ${g.purchasePriceWan}万</option>`;
-                })
-                .join('')}</select><button type="button" data-action="buy-office">购买</button>`
-            : '<span class="hint">2010年后可购楼</span>'
-        }
-      </div>
-      <p class="hint" style="margin-top:0.5rem;">房地产/并购等：后续版本开放。</p>
-    </div>`;
 }
 
 function renderGuidePanel() {
@@ -204,8 +222,9 @@ function getStockFactors(stock, cMacro) {
   const macroFactor = B_STOCK_BP_BY_C[cMacro] || 0;
   // 2. 行业影响因子
   const sectorFactor = sec?.sectorBetaBp || 0;
-  // 3. 个股自身影响因子
-  const stockFactor = stock.betaExtraBp || 0;
+  // 3. 个股自身影响因子（显示用成熟期值，实际结算用可复现随机）
+  const isMature = state.year >= (stock.matureYear || 2100);
+  const stockFactor = isMature ? (stock.matureBetaExtraBp || 0) : 0; // 成长期显示为0，实际用随机
   return { macroFactor, sectorFactor, stockFactor };
 }
 
@@ -232,22 +251,31 @@ function renderMarketView() {
   return `
     <div class="view-section">
       <h2 class="section-title">股票市场（均可配置进组合）</h2>
-      <p class="hint">本月宏观行情：股市 ${sentimentText(state.actualEquityC)} · 大环境因子 ${macroReturn}%</p>
+      <p class="hint">本月宏观行情：股市 ${sentimentText(state.actualEquityC)} · 大环境因子 ${macroReturn}% · 成长股（高波动，不派息）vs 成熟期（低波动，派息）</p>
       <table class="data-table">
-        <thead><tr><th>代码</th><th>简称</th><th>行业</th><th>股价</th><th>本月涨跌</th><th>涨跌分解</th></tr></thead>
+        <thead><tr><th>代码</th><th>简称</th><th>行业</th><th>阶段</th><th>成熟期</th><th>年股息</th><th>股价</th><th>本月涨跌</th><th>涨跌分解</th></tr></thead>
         <tbody>
           ${config.stocks
             .map((s) => {
               const sec = config.sectors?.find((x) => x.id === s.sectorId);
+              const isMature = state.year >= (s.matureYear || 2100);
+              const phaseLabel = isMature ? '成熟期' : '成长期';
+              const phaseClass = isMature ? 'return-neutral' : 'return-bear';
               const price = calculateStockPrice(s, cMacro);
               const returnPct = calculateStockReturn(s, cMacro);
               const { macroFactor, sectorFactor, stockFactor } = getStockFactors(s, cMacro);
               const returnClass = Number(returnPct) > 0 ? 'up' : Number(returnPct) < 0 ? 'down' : 'neutral';
               const returnIcon = Number(returnPct) > 0 ? '▲' : Number(returnPct) < 0 ? '▼' : '—';
+              const divLabel = isMature
+                ? `${((Number(s.dividendRateAnnual) || 0) * 100).toFixed(1)}%`
+                : '不派息';
               return `<tr>
                 <td>${s.id}</td>
                 <td>${s.shortName}</td>
                 <td>${sec?.name || s.sectorId}</td>
+                <td class="${phaseClass}" style="font-size:0.75rem;">${phaseLabel}</td>
+                <td style="font-size:0.75rem;">${s.matureYear || '—'}年</td>
+                <td style="font-size:0.75rem;">${divLabel}</td>
                 <td>${price}</td>
                 <td class="return-${returnClass}">${returnIcon} ${returnPct}%</td>
                 <td style="font-size:0.7rem;color:#ac9e7e;">
@@ -322,15 +350,19 @@ function renderBusinessDetailView() {
   const emp = state.employees.find((e) => e.id === b.employeeId);
   const pol = b.profitPolicy === 'reinvest' ? '复利' : '上交';
   const typeName = b.kind === 'stock' ? '股票' : '期货';
+  const aiLine = emp?.aiStyle ? (AI_STYLES[emp.aiStyle]?.name || emp.aiStyle) : '—';
 
-  // 组合摘要
+  const sleeveBp = b.stockSleeveBp != null && b.stockSleeveBp >= 0 ? b.stockSleeveBp : 10000;
+
+  // 组合摘要（轻仓时「占AUM」为相对总本金的实际比例）
   let portfolioHtml = '—';
   if (b.kind === 'stock' && b.stockPortfolio?.length) {
     portfolioHtml = b.stockPortfolio
       .map((p) => {
         const st = config.stocks.find((s) => s.id === p.stockId);
         const name = st?.shortName || p.stockId;
-        return `${name} ${(p.weightBp / 100).toFixed(1)}%`;
+        const pctAum = ((p.weightBp | 0) / 10000) * (sleeveBp / 10000) * 100;
+        return `${name} 占AUM ${pctAum.toFixed(1)}%`;
       })
       .join(' · ');
   } else if (b.kind === 'fut') {
@@ -345,7 +377,7 @@ function renderBusinessDetailView() {
         <h2 class="section-title" style="margin:0;">${emp?.name || '未知'} · ${typeName}业务详情</h2>
       </div>
 
-      <div class="overview-stats" style="grid-template-columns:repeat(4,1fr);">
+      <div class="overview-stats" style="grid-template-columns:repeat(5,1fr);">
         <div class="stat-box">
           <div class="label">AUM</div>
           <div class="value">${formatMoney(b.aumWan)}</div>
@@ -361,6 +393,10 @@ function renderBusinessDetailView() {
         <div class="stat-box">
           <div class="label">${b.kind === 'stock' ? '指导风格' : '杠杆'}</div>
           <div class="value">${b.kind === 'stock' ? STOCK_GUIDE_LABELS[b.stockGuideMode ?? 1] : b.leverage + 'x'}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">员工AI</div>
+          <div class="value" style="font-size:0.85rem;">${aiLine}</div>
         </div>
       </div>
 
@@ -392,11 +428,14 @@ function renderNewBusinessView() {
   return `
     <div class="view-section">
       <h2 class="section-title">新开业务</h2>
-      <p class="hint">股票业务：开业时由员工自动生成 2～4 支股票的组合。期货：自选品种与初始杠杆。</p>
+      <p class="hint">股票：有 AI 且能生成有效组合时按风格满仓；否则（无 AI、或无可买股、或 AI 选不出）用本金的 20% 随机买 1～4 支。期货：自选品种与杠杆。调拨上限：初/中/高员工各 ${getEmployeeMaxAumWan({ tier: 'junior' })}/${getEmployeeMaxAumWan({ tier: 'mid' })}/${getEmployeeMaxAumWan({ tier: 'senior' })} 万，且股票≤100万、期货≤50万（取低）。</p>
 
       <div class="panel">
         <div class="flex-row" style="gap:0.75rem; flex-wrap:wrap;">
-          <label>员工<select id="dep-emp">${idle.map((e) => `<option value="${e.id}">${e.name} 能${e.ability}</option>`).join('')}</select></label>
+          <label>员工<select id="dep-emp">${idle.map((e) => {
+            const st = e.aiStyle ? AI_STYLES[e.aiStyle]?.name || e.aiStyle : '—';
+            return `<option value="${e.id}">${e.name} 能${e.ability} · 管限${getEmployeeMaxAumWan(e)}万 · ${st}</option>`;
+          }).join('')}</select></label>
           <label>类型<select id="dep-kind"><option value="stock">股票</option><option value="fut">期货</option></select></label>
           <label>本金(万)<input type="number" id="dep-alloc" class="narrow" value="20" min="1" /></label>
           <label>利润分配<select id="dep-policy"><option value="reinvest">滚存复利</option><option value="remit">上交公司</option></select></label>
@@ -431,8 +470,6 @@ function renderGuideView() {
 
 // 6. 人事招聘视图
 function renderHrView() {
-  const tiers =
-    state.year >= 2006 ? ['junior', 'mid', 'senior'] : state.year >= 1996 ? ['junior', 'mid'] : ['junior'];
   const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
   const officeOpts = ['standard', 'business', 'hq'].filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear);
   const prom = state.employees.filter((e) => canPromote(e));
@@ -464,13 +501,24 @@ function renderHrView() {
       <h2 class="section-title">人事与写字楼</h2>
 
       <div class="panel">
-        <h3 class="section-title">招聘</h3>
-        <div class="flex-row" style="margin-bottom:0.75rem; gap:1rem;">
-          <div>
-            <span class="hint">招聘等级</span><br/>
-            <select id="hr-tier">${tiers.map((t) => `<option value="${t}">${tierLabels[t]}</option>`).join('')}</select>
-            <button type="button" data-action="recruit">招聘</button>
-          </div>
+        <h3 class="section-title">人才库（0.2）</h3>
+        <p class="hint">支付 <strong>${TALENT_REFRESH_COST_WAN} 万</strong> 刷新 3～5 名候选人；招聘费按其职级（初/中/高 5/8/15 万）。每人带 AI 交易风格。</p>
+        <div class="flex-row" style="margin-bottom:0.75rem; gap:0.75rem; flex-wrap:wrap; align-items:flex-end;">
+          <button type="button" data-action="refresh-talent-pool">刷新人才（-${TALENT_REFRESH_COST_WAN}万）</button>
+        </div>
+        <div class="talent-card-grid">
+          ${(state.talentPool || [])
+            .map(
+              (t) => `
+            <div class="talent-card">
+              <div class="talent-card-name">${escapeHtml(t.name)}</div>
+              <div class="talent-card-meta">${tierLabels[t.tier] || t.tier} · ${AI_STYLES[t.aiStyle]?.name || t.aiStyle}</div>
+              <div class="talent-card-meta">能力 ${t.ability} · 忠诚 ${t.loyalty}</div>
+              <div class="talent-card-meta">招聘 ${recruitCostForTier(t.tier)} 万</div>
+              <button type="button" class="primary small" data-action="hire-talent" data-tid="${escapeHtml(t.id)}">招聘此人</button>
+            </div>`,
+            )
+            .join('') || '<p class="hint">当前人才库为空，请先刷新。</p>'}
         </div>
       </div>
 
@@ -503,11 +551,12 @@ function renderHrView() {
       <div class="panel">
         <h3 class="section-title">员工管理</h3>
         <table class="data-table">
-          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>忠诚</th><th>工龄</th><th>操作</th></tr></thead>
+          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>忠诚</th><th>AI风格</th><th>管限(万)</th><th>工龄</th><th>操作</th></tr></thead>
           <tbody>
             ${state.employees.map((e) => {
               const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
               const hasBiz = hasActiveBusiness(state, e.id);
+              const ai = e.aiStyle ? AI_STYLES[e.aiStyle]?.name || e.aiStyle : '—';
               return `<tr>
                 <td>
                   <input type="text" class="small" value="${e.name}" data-action="rename-emp" data-eid="${e.id}" style="width:80px;padding:2px 4px;font-size:0.75rem;" />
@@ -515,6 +564,8 @@ function renderHrView() {
                 <td>${tierLabels[e.tier] || e.tier}</td>
                 <td>${e.ability}</td>
                 <td>${e.loyalty}</td>
+                <td style="font-size:0.75rem;">${ai}</td>
+                <td>${getEmployeeMaxAumWan(e)}</td>
                 <td>${e.experienceMonths}月</td>
                 <td>
                   ${!hasBiz
@@ -586,11 +637,12 @@ function renderCompanyView() {
       <div class="panel">
         <h3 class="section-title">员工列表</h3>
         <table class="data-table">
-          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>忠诚</th><th>工龄(月)</th></tr></thead>
+          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>忠诚</th><th>AI</th><th>管限(万)</th><th>工龄(月)</th></tr></thead>
           <tbody>
             ${state.employees.map((e) => {
               const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
-              return `<tr><td>${e.name}</td><td>${tierLabels[e.tier] || e.tier}</td><td>${e.ability}</td><td>${e.loyalty}</td><td>${e.experienceMonths}</td></tr>`;
+              const ai = e.aiStyle ? AI_STYLES[e.aiStyle]?.name || e.aiStyle : '—';
+              return `<tr><td>${e.name}</td><td>${tierLabels[e.tier] || e.tier}</td><td>${e.ability}</td><td>${e.loyalty}</td><td>${ai}</td><td>${getEmployeeMaxAumWan(e)}</td><td>${e.experienceMonths}</td></tr>`;
             }).join('')}
           </tbody>
         </table>
@@ -697,7 +749,12 @@ function render() {
   }
 
   const cap = getTotalCapacity(state);
-  const canNext = state.phase !== 'margin' && !state.pendingMargin.length && !state.gameOver && !state.victory;
+  const canNext =
+    state.phase !== 'margin' &&
+    !state.pendingMargin.length &&
+    !state.gameOver &&
+    !state.victory &&
+    !state.showMonthReport;
 
   // ========== A区域: 顶栏（含宏观行情）==========
   if (dock) {
@@ -753,7 +810,8 @@ function render() {
 
   // 渲染当前视图
   const renderer = viewRenderers[currentView] || renderMarketView;
-  root.innerHTML = marginBlock + renderer();
+  const reportModal = state.showMonthReport && state.monthReportData ? renderMonthReportModal(state.monthReportData) : '';
+  root.innerHTML = marginBlock + renderer() + reportModal;
 
   // 绑定事件
   bindActions(root);
@@ -1018,10 +1076,24 @@ function onAction(ev) {
     render();
     return;
   }
-  if (action === 'recruit') {
-    const r = runRecruit(state, $('#hr-tier')?.value);
-    if (!r.ok) alert(r.error);
+  if (action === 'dismiss-month-report') {
+    dismissMonthReport(state);
     saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'refresh-talent-pool') {
+    const r = runRefreshTalentPool(state);
+    if (!r.ok) alert(r.error);
+    else saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'hire-talent') {
+    const tid = ev.currentTarget.getAttribute('data-tid');
+    const r = runHireFromTalent(state, tid);
+    if (!r.ok) alert(r.error);
+    else saveToLocal(state);
     render();
     return;
   }
@@ -1151,15 +1223,18 @@ function onAction(ev) {
 async function bootstrap() {
   const origin = window.location.origin;
   const pathBase = window.location.pathname.replace(/\/investment-sim\/?.*$/, '') || '';
+  // 添加时间戳参数防止缓存
+  const cacheBuster = `?t=${Date.now()}`;
+  // 优先从仓库 data/ 加载（单一事实来源）；同目录 stocks-futures.json 仅作可选回退
   const tryUrls = [
-    './stocks-futures.json',
-    `${origin}${pathBase}/data/investment-sim/stocks-futures.json`,
-    '../data/investment-sim/stocks-futures.json',
+    `${origin}${pathBase}/data/investment-sim/stocks-futures.json${cacheBuster}`,
+    `../data/investment-sim/stocks-futures.json${cacheBuster}`,
+    `./stocks-futures.json${cacheBuster}`,
   ];
   let raw = null;
   for (const u of tryUrls) {
     try {
-      const res = await fetch(u);
+      const res = await fetch(u, { cache: 'no-store' });
       if (res.ok) {
         raw = await res.json();
         break;
@@ -1175,20 +1250,32 @@ async function bootstrap() {
     return;
   }
 
+  const s0 = raw.stocks?.[0];
+  if (s0 && !('matureYear' in s0)) {
+    console.warn(
+      '[投资公司] stocks-futures 缺少 matureYear 等字段，成长/成熟与股息会错误。请使用 data/investment-sim/stocks-futures.json 完整表。'
+    );
+  }
+
   config = {
     stocks: raw.stocks,
     futures: raw.futures,
     sectors: raw.sectors || [],
   };
 
-  state = loadFromLocal();
-  if (!state || state.schemaVersion !== SCHEMA_VERSION) {
-    state = createInitialState(1);
-    saveToLocal(state);
-  }
+  // [调试模式] 每次新开网页都是新游戏，屏蔽存档功能
+  // 如需恢复存档，取消下面注释并注释掉 state = createInitialState(1);
+  // state = loadFromLocal();
+  // if (!state || state.schemaVersion !== SCHEMA_VERSION) {
+  //   state = createInitialState(1);
+  //   saveToLocal(state);
+  // }
+  state = createInitialState(1);
+  // saveToLocal(state); // 屏蔽自动保存
+
   if (state.phase === 'opening' && !state.gameOver && !state.victory) {
     runMonthOpening(state);
-    saveToLocal(state);
+    // saveToLocal(state); // 屏蔽自动保存
   }
   render();
 }

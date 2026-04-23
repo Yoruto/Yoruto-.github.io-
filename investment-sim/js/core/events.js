@@ -2,7 +2,59 @@
  * 大事件日程（演示）与小事件池（声誉分池占位，可扩展）。
  */
 
-import { mixUint32 } from './rng.js';
+import { mixUint32, majorEventTriggerH, ymToMonthIndex } from './rng.js';
+import { roundWan } from './state.js';
+
+/** 随机大事件：首月 5%，当月未触发则下月概率 +5%（上限 100%），触发后重置为 5% */
+const RANDOM_MAJOR_BASE_P = 5;
+const RANDOM_MAJOR_P_STEP = 5;
+
+/**
+ * 随机大事件池（可重复抽取）；c ∈ 0..4 与 rollMacroC 一致；数值越低，该线越偏景气温和/有利基线。
+ * @type {{ id:string, title:string, equityC:number, commodityC:number, repDelta:number, months:number }[]}
+ */
+const RANDOM_MAJOR_POOL = [
+  {
+    id: 'randRegPolicy',
+    title: '监管新政（证券/期货）：不确定性升温',
+    equityC: 4,
+    commodityC: 3,
+    repDelta: -2,
+    months: 4,
+  },
+  {
+    id: 'randRateCut',
+    title: '境内降息周期预期',
+    equityC: 1,
+    commodityC: 2,
+    repDelta: 2,
+    months: 5,
+  },
+  {
+    id: 'randCommoditySuper',
+    title: '大宗商品「超级周期」传闻',
+    equityC: 2,
+    commodityC: 0,
+    repDelta: 1,
+    months: 6,
+  },
+  {
+    id: 'randGeoOil',
+    title: '地缘冲突外溢，油价与风险资产波动',
+    equityC: 3,
+    commodityC: 1,
+    repDelta: -2,
+    months: 4,
+  },
+  {
+    id: 'randSectorStorm',
+    title: '行业政策整顿风暴（全市场情绪受挫）',
+    equityC: 4,
+    commodityC: 2,
+    repDelta: -3,
+    months: 3,
+  },
+];
 
 /** @type {{ year:number, month:number, id:string, title:string, equityC?:number, commodityC?:number, repDelta?:number, months:number }[]} */
 export const MAJOR_SCHEDULE = [
@@ -28,6 +80,36 @@ export const MAJOR_SCHEDULE = [
   },
 ];
 
+function tryPushRandomMajorEvents(state) {
+  const monthIndex = ymToMonthIndex(state.year, state.month);
+  if (typeof state.randomMajorP !== 'number' || !Number.isFinite(state.randomMajorP)) {
+    state.randomMajorP = RANDOM_MAJOR_BASE_P;
+  }
+  const p = Math.min(100, Math.max(0, state.randomMajorP));
+  const h = majorEventTriggerH(state.gameSeed, monthIndex, 0x524d01);
+  if ((h % 100) >= p) {
+    state.randomMajorP = Math.min(100, p + RANDOM_MAJOR_P_STEP);
+    return;
+  }
+
+  state.randomMajorP = RANDOM_MAJOR_BASE_P;
+
+  const hPick = majorEventTriggerH(state.gameSeed, monthIndex, 0x524d02);
+  const ev = RANDOM_MAJOR_POOL[(hPick >>> 8) % RANDOM_MAJOR_POOL.length];
+  state.majorEffectStack.push({
+    id: ev.id,
+    title: ev.title,
+    equityC: ev.equityC,
+    commodityC: ev.commodityC,
+    repDelta: ev.repDelta ?? 0,
+    monthsLeft: ev.months,
+  });
+  if (ev.repDelta) {
+    state.reputation = Math.max(0, Math.min(100, state.reputation + ev.repDelta));
+  }
+  appendMajorNote(state, `【大事件·随机】${ev.title}（持续 ${ev.months} 个月）`);
+}
+
 export function pushDueMajorEvents(state) {
   state.majorEventNote = '';
   const { year, month } = state;
@@ -51,6 +133,7 @@ export function pushDueMajorEvents(state) {
       appendMajorNote(state, `【大事件】${ev.title}（持续 ${ev.months} 个月）`);
     }
   }
+  tryPushRandomMajorEvents(state);
 }
 
 function appendMajorNote(state, text) {
@@ -120,10 +203,6 @@ export function rollMinorEvent(state, monthIndex, allowMinorThisMonth) {
 
   const ev = pool[(h >>> 16) % pool.length];
   state.reputation = Math.max(0, Math.min(100, state.reputation + ev.rep));
-  state.companyCashWan = round1(state.companyCashWan + ev.cash);
+  state.companyCashWan = roundWan(state.companyCashWan + ev.cash);
   state.minorEventNote = `【小事件】${ev.text}${ev.cash ? `（现金 ${ev.cash >= 0 ? '+' : ''}${ev.cash} 万）` : ''}`;
-}
-
-function round1(x) {
-  return Math.round(x * 10) / 10;
 }

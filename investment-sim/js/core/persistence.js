@@ -1,5 +1,5 @@
 /** 开发版存档键；更换即丢弃旧 localStorage，不做迁移 */
-const STORAGE_KEY = 'investment-sim-dev-v3';
+const STORAGE_KEY = 'investment-sim-dev-v4';
 
 /** 历史键：加载时删除 */
 const LEGACY_STORAGE_KEYS = ['investment-company-v2-save', 'investment-sim-dev-save'];

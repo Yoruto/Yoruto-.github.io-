@@ -50,6 +50,18 @@ export const NOISE_BP = Object.freeze([
 /** 招聘费（万元） */
 export const RECRUIT_COST_WAN = { junior: 5, mid: 8, senior: 15 };
 
+/** 0.2：员工作单最大管理规模（万），股票/期货共用该上限，另受业务类型上界（股票100/期货50） */
+export const EMPLOYEE_TIER_MAX_AUM_WAN = {
+  junior: 50,
+  mid: 500,
+  senior: 1000,
+};
+
+export function getEmployeeMaxAumWan(emp) {
+  const t = emp?.tier;
+  return EMPLOYEE_TIER_MAX_AUM_WAN[t] ?? 50;
+}
+
 /** 写字楼等级：租赁（P1）；购买价/物业税（P2） */
 export const OFFICE_GRADES = {
   small: {

@@ -3,7 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>投资公司发展物语 V2.0 — 原型</title>
+  <!-- 开发调试用：避免强缓存；发布前可改「弱缓存」与版本号 v= -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <link rel="icon" href="data:," />
+  <title>投资公司发展物语 V2.0 — 0.2</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -409,6 +414,43 @@
       padding: 2rem;
     }
     .end-modal h2 { color: #ffeaac; }
+
+    /* 0.2 月度报告与人才库 */
+    .month-report-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: rgba(10, 8, 6, 0.72);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .month-report-card {
+      max-width: 520px;
+      max-height: 90vh;
+      overflow: auto;
+      background: #1e2b18;
+      border: 2px solid #e8a034;
+      border-radius: 1.25rem;
+      padding: 1.25rem 1.35rem;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+    }
+    .talent-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 0.65rem;
+      margin-top: 0.5rem;
+    }
+    .talent-card {
+      background: #2a3d22;
+      border: 1px solid #5e4b34;
+      border-radius: 0.75rem;
+      padding: 0.65rem 0.75rem;
+      font-size: 0.78rem;
+    }
+    .talent-card-name { font-weight: 700; color: #ffeaac; margin-bottom: 0.25rem; }
+    .talent-card-meta { color: #ac9e7e; margin: 0.15rem 0; }
   </style>
 </head>
 <body>
@@ -417,7 +459,7 @@
 
   <!-- B+C区域容器 -->
   <div class="game-container">
-    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">原型</span></h1>
+    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">0.2</span></h1>
     <p class="game-sub">表驱动可复现结算 · 设计文档见仓库根目录</p>
 
     <div class="main-layout">
@@ -452,6 +494,7 @@
     </div>
   </div>
 
-  <script type="module" src="./js/main.js"></script>
+  <!-- 修改任意 investment-sim/js 下文件后，请把 v= 加 1，强制浏览器拉取新模块（避免只缓存旧 main） -->
+  <script type="module" src="./js/main.js?v=0.2.8"></script>
 </body>
 </html>
