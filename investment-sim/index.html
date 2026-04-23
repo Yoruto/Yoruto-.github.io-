@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>投资公司发展物语 V2.0 — 原型</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: linear-gradient(145deg, #1a472a 0%, #0e2a1a 100%);
+      font-family: 'Segoe UI', 'Roboto', 'Noto Sans', system-ui, sans-serif;
+      color: #f5f2e0;
+      padding: 16px;
+    }
+    .game-container {
+      max-width: 1100px;
+      margin: 0 auto;
+      background: rgba(30, 20, 15, 0.75);
+      border-radius: 2rem;
+      padding: 1.2rem 1.5rem;
+      border: 1px solid #dbb87c;
+      box-shadow: 0 20px 35px rgba(0,0,0,0.45);
+    }
+    .game-title {
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: #ffeaac;
+      margin: 0 0 0.5rem 0;
+    }
+    .game-sub {
+      font-size: 0.85rem;
+      color: #e9c891;
+      margin: 0 0 1rem 0;
+    }
+    /* 顶栏：与主面板分离，专放「下一个月」 */
+    .month-dock {
+      max-width: 1100px;
+      margin: 0 auto 1rem auto;
+      background: linear-gradient(180deg, #2a1f14 0%, #1a1410 100%);
+      border: 2px solid #e8a034;
+      border-radius: 1.25rem;
+      padding: 0.85rem 1.15rem;
+      box-shadow: 0 10px 28px rgba(0,0,0,0.4);
+    }
+    .month-dock-inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .month-dock-hint {
+      margin: 0.55rem 0 0 0;
+      font-size: 0.72rem;
+      color: #c9b896;
+      line-height: 1.45;
+      border-top: 1px solid rgba(232, 160, 52, 0.35);
+      padding-top: 0.5rem;
+    }
+    .status-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.75rem;
+      background: transparent;
+      padding: 0;
+      margin: 0;
+    }
+    .stat-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem 1.2rem;
+      align-items: center;
+    }
+    .stat-card {
+      background: #3d2c21;
+      padding: 0.35rem 0.9rem;
+      border-radius: 2rem;
+      font-size: 0.8rem;
+    }
+    .stat-card .lbl { color: #e9c891; margin-right: 0.35rem; }
+    .stat-card .val { font-weight: 800; color: #ffd966; font-family: monospace; }
+    .next-month-wrap {
+      flex-shrink: 0;
+      padding-left: 0.5rem;
+      border-left: 3px solid rgba(232, 160, 52, 0.6);
+      margin-left: 0.25rem;
+    }
+    .next-month-wrap button.primary {
+      min-width: 7.5rem;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    button {
+      background: #5e3a22;
+      border: none;
+      color: #fef0cf;
+      padding: 8px 16px;
+      border-radius: 40px;
+      font-weight: bold;
+      cursor: pointer;
+      font-size: 0.8rem;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+    }
+    button:active { transform: scale(0.98); }
+    button.primary {
+      background: #bd7a3a;
+      color: #fff;
+      font-size: 0.95rem;
+      padding: 10px 22px;
+    }
+    button.primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    button.danger { background: #8b3c2c; }
+    button.small { padding: 4px 10px; font-size: 0.72rem; }
+    .panel {
+      background: #1e2b18;
+      border-radius: 1.2rem;
+      padding: 1rem 1.1rem;
+      margin-bottom: 1rem;
+    }
+    .section-title {
+      font-size: 1.05rem;
+      border-left: 8px solid #f3b35f;
+      padding-left: 0.75rem;
+      margin: 0 0 0.75rem 0;
+      font-weight: bold;
+      color: #ffeaac;
+    }
+    .hint { font-size: 0.75rem; color: #ac9e7e; line-height: 1.45; margin: 0 0 0.6rem 0; }
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+      margin: 0.5rem 0;
+    }
+    .data-table th, .data-table td {
+      padding: 0.45rem 0.35rem;
+      border-bottom: 1px solid #5e4b34;
+      text-align: left;
+    }
+    .data-table th {
+      background: #3a2c1f;
+      color: #ffeaac;
+    }
+    .data-table tr:nth-child(even) { background: rgba(45, 58, 34, 0.35); }
+    input, select {
+      background: #2e2a24;
+      border: 1px solid #b97f44;
+      color: #ffefc0;
+      padding: 5px 8px;
+      border-radius: 8px;
+      font-size: 0.8rem;
+    }
+    input.narrow { width: 4rem; }
+    .flex-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .margin-alert {
+      background: #5c3d1a;
+      border: 1px solid #e8a034;
+      border-radius: 1rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+    }
+    .log-panel {
+      max-height: 220px;
+      overflow: auto;
+      font-size: 0.75rem;
+      line-height: 1.5;
+    }
+    .log-panel .log-line { margin: 0.2rem 0; }
+    .log-panel .log-key { color: #ac9e7e; margin-right: 0.35rem; }
+    .guide-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 0.4rem;
+      max-height: 200px;
+      overflow-y: auto;
+      margin: 0.5rem 0;
+    }
+    .guide-grid label { font-size: 0.72rem; display: flex; flex-direction: column; gap: 2px; }
+    .hidden { display: none !important; }
+
+    /* ========== ABC区域布局 ========== */
+    /* A区域增强 - 宏观行情整合到顶栏 */
+    .market-sentiment {
+      background: #4a3728 !important;
+      border: 1px solid #c98a3f;
+    }
+    .sentiment-bull { color: #7fff7f; }
+    .sentiment-bear { color: #ff7f7f; }
+    .sentiment-neutral { color: #ffd966; }
+
+    /* B+C区域主布局 */
+    .main-layout {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    /* B区域: 侧边栏 */
+    .sidebar-b {
+      background: #1e2b18;
+      border-radius: 1.2rem;
+      padding: 1rem;
+      border: 1px solid #5e4b34;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      max-height: calc(100vh - 200px);
+      overflow-y: auto;
+    }
+
+    .function-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .function-nav button {
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      background: #3d2c21;
+      border: 1px solid #5e3a22;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      transition: all 0.15s ease;
+    }
+
+    .function-nav button:hover {
+      background: #5e3a22;
+      border-color: #b97f44;
+    }
+
+    .function-nav button.active {
+      background: #bd7a3a;
+      border-color: #e8a034;
+      box-shadow: 0 2px 8px rgba(232, 160, 52, 0.3);
+    }
+
+    .nav-label {
+      font-size: 0.7rem;
+      color: #ac9e7e;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+      padding-left: 0.25rem;
+    }
+
+    /* B区域: 已开业务缩略列表 */
+    .active-biz-section {
+      border-top: 1px solid #5e4b34;
+      padding-top: 0.75rem;
+    }
+
+    .biz-thumb {
+      font-size: 0.75rem;
+      padding: 0.6rem 0.5rem;
+      background: rgba(45, 58, 34, 0.5);
+      border-radius: 0.5rem;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s ease;
+    }
+
+    .biz-thumb:hover {
+      background: rgba(45, 58, 34, 0.8);
+      border-color: #b97f44;
+    }
+
+    .biz-thumb.active {
+      background: rgba(189, 122, 58, 0.2);
+      border-color: #bd7a3a;
+    }
+
+    .biz-thumb .biz-name {
+      font-weight: 600;
+      color: #ffeaac;
+      margin-bottom: 0.2rem;
+    }
+
+    .biz-thumb .biz-meta {
+      color: #ac9e7e;
+      font-size: 0.7rem;
+    }
+
+    .biz-thumb .biz-aum {
+      color: #ffd966;
+      font-weight: 600;
+    }
+
+    .empty-biz-hint {
+      font-size: 0.75rem;
+      color: #7a6b5a;
+      text-align: center;
+      padding: 1rem 0;
+      font-style: italic;
+    }
+
+    /* C区域: 内容区 */
+    .content-c {
+      background: #1e2b18;
+      border-radius: 1.2rem;
+      padding: 1rem 1.1rem;
+      border: 1px solid #5e4b34;
+      min-height: 500px;
+    }
+
+    /* 视图切换动画 */
+    .view-section {
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* 业务卡片网格（用于业务总览视图） */
+    .business-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .biz-card {
+      background: #2a3d22;
+      border: 1px solid #5e4b34;
+      border-radius: 1rem;
+      padding: 1rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .biz-card:hover {
+      border-color: #b97f44;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .biz-card .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .biz-card .card-type {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background: #3d2c21;
+      color: #e9c891;
+    }
+
+    .biz-card .card-type.stock { background: #2a4a2a; color: #7fff7f; }
+    .biz-card .card-type.fut { background: #4a2a2a; color: #ff7f7f; }
+
+    /* 股票涨跌颜色 */
+    .return-up {
+      color: #ff6b6b;
+      font-weight: 600;
+    }
+    .return-down {
+      color: #7fff7f;
+      font-weight: 600;
+    }
+    .return-neutral {
+      color: #ac9e7e;
+    }
+
+    /* 公司概览视图 */
+    .overview-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .stat-box {
+      background: #2a3d22;
+      border: 1px solid #5e4b34;
+      border-radius: 0.75rem;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .stat-box .label {
+      font-size: 0.75rem;
+      color: #ac9e7e;
+      margin-bottom: 0.25rem;
+    }
+
+    .stat-box .value {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: #ffeaac;
+    }
+    .end-modal {
+      text-align: center;
+      padding: 2rem;
+    }
+    .end-modal h2 { color: #ffeaac; }
+  </style>
+</head>
+<body>
+  <!-- A区域: 顶部状态栏（包含宏观行情） -->
+  <div id="month-dock" class="month-dock" aria-label="回合推进"></div>
+
+  <!-- B+C区域容器 -->
+  <div class="game-container">
+    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">原型</span></h1>
+    <p class="game-sub">表驱动可复现结算 · 设计文档见仓库根目录</p>
+
+    <div class="main-layout">
+      <!-- B区域: 功能导航侧边栏 -->
+      <aside class="sidebar-b" id="sidebar-b">
+        <!-- 功能按钮 -->
+        <div>
+          <div class="nav-label">功能菜单</div>
+          <nav class="function-nav" id="function-nav">
+            <button type="button" data-view="market" class="active">市场行情</button>
+            <button type="button" data-view="business-list">在营业务</button>
+            <button type="button" data-view="new-business">新开业务</button>
+            <button type="button" data-view="guide">本月指导</button>
+            <button type="button" data-view="hr">人事招聘</button>
+            <button type="button" data-view="company">公司情况</button>
+          </nav>
+        </div>
+
+        <!-- 已开展业务列表 -->
+        <div class="active-biz-section">
+          <div class="nav-label">在营业务</div>
+          <div id="active-biz-list">
+            <p class="empty-biz-hint">暂无在营业务</p>
+          </div>
+        </div>
+      </aside>
+
+      <!-- C区域: 动态内容区 -->
+      <main class="content-c" id="app">
+        <p class="hint">加载中…</p>
+      </main>
+    </div>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
