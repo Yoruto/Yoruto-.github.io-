@@ -7,6 +7,8 @@ import {
   canPromote,
   SCHEMA_VERSION,
   recruitCostForTier,
+  employeeCanDeploy,
+  hasActiveBusiness,
 } from './core/state.js';
 import {
   SENTIMENT_LABELS,
@@ -37,8 +39,6 @@ import {
   runReleaseLease,
   runPurchaseOffice,
   runSellOwnedOffice,
-  employeeCanDeploy,
-  hasActiveBusiness,
 } from './core/monthEngine.js';
 import {
   ensureCompanyEquity,
@@ -56,6 +56,10 @@ import { acceptNpcInvestment, rejectNpcInvestment } from './core/npcInvestors.js
 import { saveToLocal, loadFromLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
 import { initGM } from './core/gm.js';
 import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
+import { initOtherCompaniesUI } from './ui/otherCompaniesUI.js';
+import initStartupUI from './ui/startupUI.js';
+import { loadRealEstateConfig } from './core/realEstate.js';
+import { loadStartupConfig } from './core/startupInvest.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -1120,11 +1124,18 @@ function renderSidebar() {
 }
 
 function render() {
+  // #region agent log - Hypothesis D: Render function called
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:render-entry',message:'render() called',data:{stateIsNull:state===null,configIsNull:config===null,phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,currentView},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
   const root = $('#app');
   const dock = $('#month-dock');
   const sidebar = $('#sidebar-b');
 
   if (!state) {
+    // #region agent log - Hypothesis D: State is null in render
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:render-null-state',message:'state is null, showing 尚未初始化',data:{},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     if (dock) dock.innerHTML = '';
     if (sidebar) sidebar.classList.add('hidden');
     root.innerHTML = '<p class="hint">尚未初始化</p>';
@@ -1814,6 +1825,10 @@ function onAction(ev) {
 }
 
 async function bootstrap() {
+  // #region agent log - Hypothesis A/B/D: Config loading issues
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:bootstrap-start',message:'bootstrap started',data:{timestamp:Date.now()},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
   const origin = window.location.origin;
   const pathBase = window.location.pathname.replace(/\/investment-sim\/?.*$/, '') || '';
   // 添加时间戳参数防止缓存
@@ -1832,6 +1847,9 @@ async function bootstrap() {
       const res = await fetch(u, { cache: 'no-store' });
       if (res.ok) {
         raw = await res.json();
+        // #region agent log - Hypothesis A: Config loaded successfully
+        fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-loaded',message:'config loaded from URL',data:{url:u,hasStocks:!!raw.stocks,stockCount:raw.stocks?.length},timestamp:Date.now()})}).catch(()=>{});
+        // #endregion
         break;
       }
     } catch (e) {
@@ -1842,6 +1860,9 @@ async function bootstrap() {
   // 如果 fetch 失败，使用内嵌配置作为备用
   if (!raw) {
     console.warn('[投资公司] 无法从服务器加载 stocks-futures.json，使用内嵌默认配置');
+    // #region agent log - Hypothesis A: Config failed, using embedded
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-fallback',message:'using embedded config',data:{lastError:String(lastError)},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     raw = EMBEDDED_CONFIG;
   }
 
@@ -1858,6 +1879,10 @@ async function bootstrap() {
     sectors: raw.sectors || [],
   };
 
+  // #region agent log - Hypothesis D: Config object created
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-assigned',message:'config object assigned',data:{configIsNull:config===null,hasStocks:!!config?.stocks,hasFutures:!!config?.futures},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
   // [调试模式] 每次新开网页都是新游戏，屏蔽存档功能
   // 如需恢复存档，取消下面注释并注释掉 state = createInitialState(1);
   // state = loadFromLocal();
@@ -1866,13 +1891,50 @@ async function bootstrap() {
   //   saveToLocal(state);
   // }
   state = createInitialState(1);
+
+  // #region agent log - Hypothesis C: State created
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:state-created',message:'initial state created',data:{stateIsNull:state===null,phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
+  // 预加载房地产配置，确保月结时 handler 可用
+  try {
+    // #region agent log - Hypothesis B: Loading real estate config
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:realestate-load-start',message:'loading real estate config',data:{},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    await loadRealEstateConfig();
+    // #region agent log - Hypothesis B: Real estate config loaded
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:realestate-load-success',message:'real estate config loaded',data:{},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    await loadStartupConfig();
+    // #region agent log - Hypothesis B: Startup config loaded
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:startup-load-success',message:'startup config loaded',data:{},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+  } catch (e) {
+    // #region agent log - Hypothesis B: Config load failed
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-load-error',message:'config loading failed',data:{error:String(e),stack:e.stack},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    console.warn('加载地产配置失败', e);
+  }
   // saveToLocal(state); // 屏蔽自动保存
 
   if (state.phase === 'opening' && !state.gameOver && !state.victory) {
+    // #region agent log - Hypothesis C: Running month opening
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:run-opening',message:'running runMonthOpening',data:{},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     runMonthOpening(state);
+    // #region agent log - Hypothesis C: Month opening completed
+    fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:opening-done',message:'runMonthOpening completed',data:{newPhase:state?.phase,cash:state?.companyCashWan},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
     // saveToLocal(state); // 屏蔽自动保存
   }
+
+  // #region agent log - Hypothesis D/E: About to render
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:before-render',message:'about to call render()',data:{stateIsNull:state===null,configIsNull:config===null,phase:state?.phase},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
   render();
+  // #region agent log - Hypothesis D/E: Render completed
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:render-done',message:'render() completed',data:{},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
 
   // 初始化 GM（调试命令面板）
   try {
@@ -1887,10 +1949,22 @@ async function bootstrap() {
       applyForListing: () => applyForListing(state),
       ensureCompanyEquity: () => ensureCompanyEquity(state),
     });
+    // 初始化初创投资侧边面板
+    try {
+      initStartupUI(() => state, () => { saveToLocal(state); render(); });
+    } catch (e) {
+      console.warn('初始化初创 UI 失败', e);
+    }
     const ui = bindGMUI(gm);
     const btn = renderGMButton();
     // 初始隐藏按钮，按 ` 打开
     btn.style.display = 'none';
+    // 初始化其他公司面板 UI（轻量）
+    try {
+      initOtherCompaniesUI();
+    } catch (e) {
+      console.warn('otherCompanies UI init failed', e);
+    }
   } catch (e) {
     console.warn('GM 初始化失败', e);
   }

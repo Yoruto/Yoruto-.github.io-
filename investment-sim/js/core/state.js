@@ -229,3 +229,15 @@ export function recruitCostForTier(tier) {
   if (tier === 'mid') return RECRUIT_COST_WAN.mid;
   return RECRUIT_COST_WAN.senior;
 }
+
+/** 查询员工是否有在营业务 */
+export function hasActiveBusiness(state, employeeId) {
+  return state.activeBusinesses.some((b) => b.employeeId === employeeId);
+}
+
+/** 检查员工是否可以部署新业务 */
+export function employeeCanDeploy(state, emp) {
+  if (emp.hiredThisMonth) return false;
+  if (hasActiveBusiness(state, emp.id)) return false;
+  return true;
+}

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "projectTypes": {
+    "residential": {
+      "name": "住宅开发",
+      "nameTemplates": ["{location}{series}花园", "{location}{series}公馆", "{location}{series}府邸"],
+      "cycleMonthsMin": 12,
+      "cycleMonthsMax": 24,
+      "investMinWan": 500,
+      "investMaxWan": 5000,
+      "roiMin": 0.08,
+      "roiMax": 0.25,
+      "riskLevel": "low",
+      "abandonRate": 0.05,
+      "unlockYear": 1990
+    },
+    "commercial": {
+      "name": "商业地产",
+      "nameTemplates": ["{location}{series}广场", "{location}{series}中心", "{location}国际{series}"],
+      "cycleMonthsMin": 18,
+      "cycleMonthsMax": 36,
+      "investMinWan": 2000,
+      "investMaxWan": 10000,
+      "roiMin": 0.10,
+      "roiMax": 0.35,
+      "riskLevel": "medium",
+      "abandonRate": 0.10,
+      "unlockYear": 1995
+    },
+    "office": {
+      "name": "写字楼",
+      "nameTemplates": ["{location}{series}大厦", "{location}{series}国际", "{location}金融{series}"],
+      "cycleMonthsMin": 24,
+      "cycleMonthsMax": 42,
+      "investMinWan": 3000,
+      "investMaxWan": 15000,
+      "roiMin": 0.12,
+      "roiMax": 0.30,
+      "riskLevel": "medium",
+      "abandonRate": 0.12,
+      "unlockYear": 1998
+    },
+    "industrial": {
+      "name": "产业园区",
+      "nameTemplates": ["{location}{series}科技园", "{location}{series}产业园", "{location}创新{series}"],
+      "cycleMonthsMin": 36,
+      "cycleMonthsMax": 48,
+      "investMinWan": 5000,
+      "investMaxWan": 30000,
+      "roiMin": 0.15,
+      "roiMax": 0.50,
+      "riskLevel": "high",
+      "abandonRate": 0.20,
+      "unlockYear": 2000
+    }
+  },
+  "locationPrefixes": [
+    "滨江", "临湖", "御景", "盛世", "锦绣", "中央", "新城", "世纪",
+    "星河", "云端", "山水", "明珠", "华府", "尊邸", "云顶", "天境"
+  ],
+  "seriesSuffixes": [
+    "一号", "首府", "名门", "世家", "雅苑", "尚品", "尊品", "臻品",
+    "天玺", "玉玺", "金座", "银座", "国际", "环球", "时代", "未来"
+  ],
+  "stages": [
+    {"id": "dd", "name": "尽职调查", "durationMonths": 1, "costRate": 0.01, "canAbort": true},
+    {"id": "land", "name": "土地获取", "durationMonths": 2, "costRate": 0.30, "canAbort": false},
+    {"id": "construction", "name": "建设施工", "durationMonths": 8, "costRate": 0.40, "canAbort": false},
+    {"id": "sales", "name": "销售回款", "durationMonths": 6, "costRate": 0.20, "canAbort": false},
+    {"id": "settlement", "name": "项目结算", "durationMonths": 1, "costRate": 0.09, "canAbort": false}
+  ]
+}

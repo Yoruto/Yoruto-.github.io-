@@ -25,6 +25,8 @@ import {
   canPromote,
   SCHEMA_VERSION,
   computeBusinessAbility,
+  hasActiveBusiness,
+  employeeCanDeploy,
 } from './state.js';
 import {
   OFFICE_GRADES,
@@ -51,7 +53,9 @@ import {
   applyDilutionOnFundraisingSuccess,
   maybeGenerateAnnualReport,
 } from './companyEquity.js';
+import { processRealEstateMonthly } from './realEstate.js';
 import { tryNpcInvestment, expireNpcIfNeeded } from './npcInvestors.js';
+import { processStartupMonthly } from './startupInvest.js';
 
 function compareYm(a, y, m) {
   if (a.year !== y) return a.year - y;
@@ -66,6 +70,10 @@ export function listingOk(listingYm, year, month) {
 
 /** 月初：扣款 + 大事件入栈 + 宏观（文档第十一节 1~3 合并为一步） */
 export function runMonthOpening(state) {
+  // #region agent log - Hypothesis C: runMonthOpening called
+  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'monthEngine.js:opening-start',message:'runMonthOpening called',data:{phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month,cash:state?.companyCashWan},timestamp:Date.now()})}).catch(()=>{});
+  // #endregion
+
   if (state.gameOver || state.victory) return;
 
   pushDueMajorEvents(state);
@@ -139,16 +147,6 @@ export function runMonthOpening(state) {
   }
 
   state.phase = 'market';
-}
-
-export function hasActiveBusiness(state, employeeId) {
-  return state.activeBusinesses.some((b) => b.employeeId === employeeId);
-}
-
-export function employeeCanDeploy(state, emp) {
-  if (emp.hiredThisMonth) return false;
-  if (hasActiveBusiness(state, emp.id)) return false;
-  return true;
 }
 
 /**
@@ -657,6 +655,29 @@ export function runSettlement(state, config) {
         console.error('fundraising settle error', e);
       }
       continue;
+    }
+
+    // 处理房地产项目（v0.5.1）
+    if (ord.kind === 'realestate') {
+      try {
+        const handled = processRealEstateMonthly(state, ord);
+        if (handled === true) {
+          // real estate handler managed logging and state changes; continue to next ord
+          continue;
+        }
+        // if handler returns false/undefined fall through to generic settlement
+      } catch (e) {
+        console.error('processRealEstateMonthly error', e);
+        // fall through
+      }
+    }
+    if (ord.kind === 'startup_invest') {
+      try {
+        const h2 = processStartupMonthly(state, ord);
+        if (h2 === true) continue;
+      } catch (e) {
+        console.error('processStartupMonthly error', e);
+      }
     }
 
     const allocForSettle =

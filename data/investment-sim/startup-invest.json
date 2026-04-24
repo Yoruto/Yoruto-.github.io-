@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "investmentRounds": [
+    {
+      "round": "seed",
+      "name": "种子轮",
+      "minValuationWan": 300,
+      "maxValuationWan": 1500,
+      "typicalRaiseWan": [100, 500],
+      "checkIntervalMonths": 6,
+      "nextRoundProbability": 0.25,
+      "acquiredProbability": 0.05,
+      "bankruptProbability": 0.15,
+      "survivalProbability": 0.55,
+      "unlockYear": 1990
+    },
+    {
+      "round": "angel",
+      "name": "天使轮",
+      "minValuationWan": 1000,
+      "maxValuationWan": 5000,
+      "typicalRaiseWan": [300, 1500],
+      "checkIntervalMonths": 6,
+      "nextRoundProbability": 0.35,
+      "acquiredProbability": 0.10,
+      "bankruptProbability": 0.20,
+      "survivalProbability": 0.35,
+      "unlockYear": 1992
+    },
+    {
+      "round": "pre_a",
+      "name": "Pre-A轮",
+      "minValuationWan": 3000,
+      "maxValuationWan": 10000,
+      "typicalRaiseWan": [1000, 3000],
+      "checkIntervalMonths": 6,
+      "nextRoundProbability": 0.50,
+      "acquiredProbability": 0.05,
+      "bankruptProbability": 0.15,
+      "survivalProbability": 0.30,
+      "unlockYear": 1998
+    },
+    {
+      "round": "series_a",
+      "name": "A轮",
+      "minValuationWan": 8000,
+      "maxValuationWan": 30000,
+      "typicalRaiseWan": [2000, 8000],
+      "checkIntervalMonths": 6,
+      "nextRoundProbability": 0.55,
+      "acquiredProbability": 0.15,
+      "bankruptProbability": 0.15,
+      "survivalProbability": 0.15,
+      "unlockYear": 2000
+    },
+    {
+      "round": "series_b",
+      "name": "B轮",
+      "minValuationWan": 30000,
+      "maxValuationWan": 100000,
+      "typicalRaiseWan": [5000, 20000],
+      "checkIntervalMonths": 6,
+      "nextRoundProbability": 0.50,
+      "acquiredProbability": 0.25,
+      "bankruptProbability": 0.15,
+      "survivalProbability": 0.10,
+      "unlockYear": 2002
+    },
+    {
+      "round": "series_c",
+      "name": "C轮",
+      "minValuationWan": 100000,
+      "maxValuationWan": 500000,
+      "typicalRaiseWan": [20000, 80000],
+      "checkIntervalMonths": 6,
+      "nextRoundProbability": 0.40,
+      "acquiredProbability": 0.35,
+      "ipoProbability": 0.10,
+      "bankruptProbability": 0.10,
+      "survivalProbability": 0.05,
+      "unlockYear": 2005
+    },
+    {
+      "round": "pre_ipo",
+      "name": "Pre-IPO",
+      "minValuationWan": 500000,
+      "maxValuationWan": 2000000,
+      "typicalRaiseWan": [50000, 200000],
+      "checkIntervalMonths": 6,
+      "ipoProbability": 0.60,
+      "acquiredProbability": 0.25,
+      "bankruptProbability": 0.05,
+      "survivalProbability": 0.10,
+      "unlockYear": 2008
+    }
+  ],
+  "founderArchetypes": [
+    {"id": "tech_geek", "name": "技术极客", "innovationBonus": 3, "leadershipPenalty": -1, "successRateMod": 0.0},
+    {"id": "serial_entrepreneur", "name": "连续创业者", "innovationBonus": 1, "leadershipBonus": 2, "successRateMod": 0.10},
+    {"id": "big_co_exec", "name": "大厂高管", "innovationBonus": 0, "leadershipBonus": 3, "executionBonus": 2, "successRateMod": 0.05},
+    {"id": "academic", "name": "学术派", "innovationBonus": 3, "executionPenalty": -1, "successRateMod": -0.05},
+    {"id": "sales_shark", "name": "销售天才", "innovationBonus": -1, "leadershipBonus": 3, "successRateMod": 0.0},
+    {"id": "product_guru", "name": "产品大神", "innovationBonus": 2, "executionBonus": 2, "successRateMod": 0.05}
+  ],
+  "nameGenerators": {
+    "finance": [
+      "{city}{suffix}金服", "{city}{suffix}资本", "{city}{suffix}支付", "{suffix}财富",
+      "蚂蚁财富", "京东金融", "陆金所", "众安保险"
+    ],
+    "realestate": [
+      "{city}{suffix}置地", "{city}{suffix}地产", "{suffix}置业", "{suffix}房产",
+      "链家网", "贝壳找房", "自如公寓", "房多多"
+    ],
+    "tech": [
+      "{city}{suffix}科技", "{city}{suffix}互联", "{suffix}网络", "{suffix}科技",
+      "阿里巴巴", "腾讯科技", "百度在线", "京东商城",
+      "网易公司", "搜狐门户", "新浪门户", "携程旅行",
+      "美团点评", "滴滴出行", "今日头条", "快手科技"
+    ],
+    "semiconductor": [
+      "{city}{suffix}微电子", "{city}{suffix}芯片", "{suffix}半导体", "{suffix}集成电路",
+      "中芯国际", "紫光展锐", "寒武纪", "地平线"
+    ],
+    "consumer": [
+      "{city}{suffix}消费", "{city}{suffix}品牌", "{suffix}零售", "{suffix}生活",
+      "拼多多", "小红书", "哔哩哔哩", "得物App",
+      "喜茶", "奈雪的茶", "瑞幸咖啡", "完美日记"
+    ],
+    "medical": [
+      "{city}{suffix}生物", "{city}{suffix}医疗", "{suffix}制药", "{suffix}健康",
+      "药明康德", "恒瑞医药", "迈瑞医疗", "复星医药",
+      "平安好医生", "微医", "叮当快药", "贝瑞基因"
+    ],
+    "energy": [
+      "{city}{suffix}能源", "{city}{suffix}动力", "{suffix}新能源", "{suffix}电力",
+      "宁德时代", "比亚迪", "蔚来汽车", "小鹏汽车",
+      "理想汽车", "特来电", "星星充电", "协鑫集团"
+    ],
+    "aerospace": [
+      "{city}{suffix}航天", "{city}{suffix}航空", "{suffix}汽车", "{suffix}交通",
+      "蓝箭航天", "星际荣耀", "零壹空间", "长光卫星",
+      "吉利航天", "亿航智能", "大疆创新", "航天宏图"
+    ]
+  },
+  "cityNames": [
+    "北京", "上海", "深圳", "杭州", "广州", "成都", "南京", "苏州",
+    "武汉", "西安", "天津", "青岛", "厦门", "合肥", "长沙", "重庆"
+  ],
+  "nameSuffixes": [
+    "未来", "创新", "智慧", "星辰", "银河", "量子", "云端", "极光",
+    "领航", "先锋", "卓越", "领航", "宏图", "致远", "腾飞", "腾飞"
+  ]
+}

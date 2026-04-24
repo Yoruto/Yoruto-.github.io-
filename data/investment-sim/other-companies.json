@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "categories": [
+    { "id": "investment_firms", "name": "投资机构", "icon": "🏢" },
+    { "id": "listed_companies", "name": "上市公司", "icon": "📈" },
+    { "id": "global_giants", "name": "国际巨头", "icon": "🌐" },
+    { "id": "private_companies", "name": "私有企业", "icon": "🔒" }
+  ],
+  "companies": [
+    {
+      "id": "SEQ-001",
+      "name": "赤松创投",
+      "shortName": "赤松",
+      "category": "investment_firms",
+      "foundingYear": 1972,
+      "headquarters": "美国硅谷",
+      "description": "全球顶级风险投资机构，专注科技、医疗、消费领域早期投资",
+      "aumGrowthCurve": [
+        {"year": 1990, "aumWan": 500000, "note": "进入中国前"},
+        {"year": 2000, "aumWan": 1200000, "note": "互联网泡沫后"},
+        {"year": 2010, "aumWan": 5000000, "note": "移动互联网时代"},
+        {"year": 2020, "aumWan": 15000000, "note": "全球布局完成"}
+      ],
+      "investmentFocus": ["tech", "medical", "consumer"],
+      "investmentStage": ["seed", "angel", "series_a", "series_b"],
+      "style": "aggressive",
+      "relationship": {"initial": 0, "max": 100, "min": -50},
+      "landmarkDeals": [
+        {"year": 1999, "target": "网景科技", "returnMultiple": 100, "note": "经典战役"},
+        {"year": 2004, "target": "全球搜索", "returnMultiple": 300, "note": "巅峰之作"}
+      ],
+      "competitiveBehavior": {
+        "bidAgainstPlayer": 0.3,
+        "coInvestWillingness": 0.5,
+        "valuationAggressiveness": 0.8
+      }
+    },
+    {
+      "id": "SEQ-002",
+      "name": "磐石资本",
+      "shortName": "磐石",
+      "category": "investment_firms",
+      "foundingYear": 1992,
+      "headquarters": "北京",
+      "description": "最早进入中国的国际投资机构之一",
+      "aumGrowthCurve": [
+        {"year": 1992, "aumWan": 50000},
+        {"year": 2000, "aumWan": 300000},
+        {"year": 2010, "aumWan": 1500000},
+        {"year": 2020, "aumWan": 5000000}
+      ],
+      "investmentFocus": ["tech", "consumer", "media"],
+      "investmentStage": ["angel", "series_a", "series_b"],
+      "style": "balanced",
+      "relationship": {"initial": 10, "max": 100, "min": -30}
+    },
+    {
+      "id": "SEQ-003",
+      "name": "青云投资",
+      "shortName": "青云",
+      "category": "investment_firms",
+      "foundingYear": 2005,
+      "headquarters": "北京",
+      "description": "价值投资典范，从早期到PE全覆盖",
+      "aumGrowthCurve": [
+        {"year": 2005, "aumWan": 200000},
+        {"year": 2010, "aumWan": 800000},
+        {"year": 2020, "aumWan": 8000000}
+      ],
+      "investmentFocus": ["tech", "medical", "consumer", "energy"],
+      "investmentStage": ["series_a", "series_b", "series_c", "pe"],
+      "style": "value",
+      "relationship": {"initial": 0, "max": 100, "min": -20}
+    },
+    {
+      "id": "SEQ-004",
+      "name": "愿景基金",
+      "shortName": "愿景",
+      "category": "investment_firms",
+      "foundingYear": 2016,
+      "headquarters": "日本东京",
+      "description": "激进投资策略，大额押注科技独角兽",
+      "aumGrowthCurve": [
+        {"year": 2016, "aumWan": 6000000},
+        {"year": 2020, "aumWan": 10000000}
+      ],
+      "investmentFocus": ["tech", "ai", "robotics"],
+      "investmentStage": ["series_b", "series_c", "pre_ipo"],
+      "style": "hyper_aggressive",
+      "relationship": {"initial": -10, "max": 80, "min": -50}
+    },
+    {
+      "id": "SEQ-005",
+      "name": "鼎盛直投",
+      "shortName": "鼎盛",
+      "category": "investment_firms",
+      "foundingYear": 1986,
+      "headquarters": "美国纽约",
+      "description": "投行背景，偏向成长期和Pre-IPO项目",
+      "aumGrowthCurve": [
+        {"year": 1990, "aumWan": 300000},
+        {"year": 2000, "aumWan": 800000},
+        {"year": 2010, "aumWan": 2000000},
+        {"year": 2020, "aumWan": 5000000}
+      ],
+      "investmentFocus": ["finance", "tech", "energy"],
+      "investmentStage": ["series_c", "pre_ipo", "pe"],
+      "style": "conservative",
+      "relationship": {"initial": 5, "max": 100, "min": -30}
+    },
+    {
+      "id": "STK0007-CORP",
+      "name": "华芯半导体股份有限公司",
+      "shortName": "华芯",
+      "category": "listed_companies",
+      "stockId": "STK0007",
+      "industry": "tech",
+      "foundingYear": 1992,
+      "listingYear": 1997,
+      "headquarters": "上海",
+      "description": "国内领先的半导体设计公司，专注模拟芯片",
+      "ceo": {
+        "name": "张卫东",
+        "background": "清华EE博士，前Intel工程师",
+        "leadership": 8,
+        "innovation": 9
+      },
+      "businessModel": "fabless",
+      "keyProducts": ["电源管理芯片", "信号链芯片", "传感器接口"],
+      "marketPosition": "国内前三"
+    },
+    {
+      "id": "STK0001-CORP",
+      "name": "民信城市商业银行",
+      "shortName": "民信银行",
+      "category": "listed_companies",
+      "stockId": "STK0001",
+      "industry": "finance",
+      "foundingYear": 1988,
+      "listingYear": 1992,
+      "headquarters": "深圳",
+      "description": "区域性银行龙头，零售业务突出",
+      "ceo": {
+        "name": "李国华",
+        "leadership": 7,
+        "execution": 8
+      }
+    },
+    {
+      "id": "STK0003-CORP",
+      "name": "恒基置地发展集团",
+      "shortName": "恒基置地",
+      "category": "listed_companies",
+      "stockId": "STK0003",
+      "industry": "realestate",
+      "foundingYear": 1985,
+      "listingYear": 1993,
+      "headquarters": "上海",
+      "description": "长三角地区龙头地产开发商",
+      "ceo": {
+        "name": "王建国",
+        "leadership": 8,
+        "execution": 7
+      }
+    },
+    {
+      "id": "GG-001",
+      "name": "金橡树控股集团",
+      "shortName": "金橡树",
+      "category": "global_giants",
+      "foundingYear": 1839,
+      "transformYear": 1965,
+      "headquarters": "美国奥马哈",
+      "description": "传奇投资大师掌舵的投资帝国，多元化控股公司",
+      "chairman": {
+        "name": "华伦·巴菲",
+        "investmentPhilosophy": "价值投资",
+        "famousQuotes": ["别人贪婪我恐惧，别人恐惧我贪婪"]
+      },
+      "aumGrowthCurve": [
+        {"year": 1990, "aumWan": 5000000},
+        {"year": 2000, "aumWan": 15000000},
+        {"year": 2010, "aumWan": 40000000},
+        {"year": 2020, "aumWan": 80000000}
+      ],
+      "investmentFocus": ["finance", "insurance", "consumer", "energy"],
+      "style": "legendary_value",
+      "marketInfluence": 0.95
+    },
+    {
+      "id": "GG-002",
+      "name": "黑曜石集团",
+      "shortName": "黑曜石",
+      "category": "global_giants",
+      "foundingYear": 1985,
+      "headquarters": "美国纽约",
+      "description": "全球最大的另类资产管理公司，PE+RE双引擎",
+      "aumGrowthCurve": [
+        {"year": 1990, "aumWan": 200000},
+        {"year": 2000, "aumWan": 800000},
+        {"year": 2010, "aumWan": 3000000},
+        {"year": 2020, "aumWan": 8000000}
+      ],
+      "investmentFocus": ["realestate", "pe", "credit"],
+      "style": "private_equity",
+      "marketInfluence": 0.90
+    },
+    {
+      "id": "GG-003",
+      "name": "铁山资本集团",
+      "shortName": "铁山",
+      "category": "global_giants",
+      "foundingYear": 1976,
+      "headquarters": "美国纽约",
+      "description": "杠杆收购(LBO)鼻祖，大型PE交易王者",
+      "aumGrowthCurve": [
+        {"year": 1990, "aumWan": 400000},
+        {"year": 2000, "aumWan": 1200000},
+        {"year": 2010, "aumWan": 4000000},
+        {"year": 2020, "aumWan": 10000000}
+      ],
+      "investmentFocus": ["pe", "infrastructure", "energy"],
+      "style": "lbo_master",
+      "marketInfluence": 0.88
+    },
+    {
+      "id": "PRIV-001",
+      "name": "华夏通信技术",
+      "shortName": "华夏通",
+      "category": "private_companies",
+      "foundingYear": 1987,
+      "headquarters": "深圳",
+      "description": "全球领先的ICT基础设施和智能终端提供商",
+      "founder": "任建华",
+      "industry": "tech",
+      "businessLines": ["运营商业务", "企业业务", "消费者业务"],
+      "privateStatus": "员工持股",
+      "estimatedValuationWan": 15000000
+    },
+    {
+      "id": "PRIV-002",
+      "name": "跳动字节科技",
+      "shortName": "跳动字节",
+      "category": "private_companies",
+      "foundingYear": 2012,
+      "headquarters": "北京",
+      "description": "推荐算法驱动的内容平台巨头",
+      "founder": "张一明",
+      "industry": "tech",
+      "keyProducts": ["资讯头条", "短视频平台"],
+      "privateStatus": "风投支持",
+      "estimatedValuationWan": 8000000
+    }
+  ]
+}
