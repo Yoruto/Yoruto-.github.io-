@@ -1,8 +1,9 @@
 import { OFFICE_GRADES, RECRUIT_COST_WAN, SEVERANCE_MONTHS_PAY } from './tables.js';
 import { randomEmployeeNameForSeed } from './rng.js';
+import { createDefaultCompanyEquity } from './companyEquity.js';
 
 /** 仅与当前开发构建一致；不兼容旧存档 */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** 万元精确到 0.0001（对应 1 元人民币） */
 export function roundWan(x) {
@@ -142,6 +143,13 @@ export function createInitialState(gameSeed) {
     minorEventNote: '',
     majorEventNote: '',
     allowMinorEventThisMonth: true,
+    /** v0.4 股份与上市 */
+    companyEquity: createDefaultCompanyEquity(),
+    pendingFundraisingConfirmation: null,
+    pendingNpcInvestment: null,
+    pendingListingSuccessModal: null,
+    pendingAnnualReport: null,
+    pendingIssuanceSuccess: null,
   };
 }
 

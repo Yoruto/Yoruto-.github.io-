@@ -34,7 +34,12 @@ async function run() {
   // test fundraising: create order and progress months until completion or removal
   const beforeCash2 = state.companyCashWan;
   res = me.addActiveBusiness(state, { employeeId: emp.id, kind: 'fundraising' }, {});
-  assert(res.ok, 'add fundraising failed: ' + JSON.stringify(res));
+  if (res.needsConfirmation) {
+    const c = me.confirmFundraisingWithEquity(state, true);
+    assert(c.ok, 'confirm fundraising: ' + JSON.stringify(c));
+  } else {
+    assert(res.ok, 'add fundraising failed: ' + JSON.stringify(res));
+  }
   const bid = state.activeBusinesses.find(b => b.kind === 'fundraising').id;
   // simulate months
   let max = 12;

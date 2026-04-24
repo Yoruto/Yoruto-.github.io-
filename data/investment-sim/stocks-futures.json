@@ -48,7 +48,8 @@
     { "id": "STK0017", "name": "绿源城市水务", "shortName": "绿源", "sectorId": "util", "listingYearMonth": "1993-05", "basePrice": 298.00, "matureYear": 1993, "matureBetaExtraBp": -300, "dividendRateAnnual": 0.045, "isFictional": true, "notes": "公用-成熟期：上市即成熟。成长期0年。高股息低波动。" },
     { "id": "STK0018", "name": "净能环保", "shortName": "净能", "sectorId": "util", "listingYearMonth": "2002-08", "basePrice": 15.60, "matureYear": 2010, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.02, "isFictional": true, "notes": "公用-成长期：成长期8年（2002+8=2010成熟）。新兴环保成长期较长。" },
     { "id": "STK0019", "name": "丰禾种业", "shortName": "丰禾", "sectorId": "agri", "listingYearMonth": "1990-08", "basePrice": 52.30, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.025, "isFictional": true, "notes": "农业-成熟期：上市即成熟。成长期0年。" },
-    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "1994-02", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true, "notes": "农业-成长期：成长期5年（1994+5=1999成熟）。" }
+    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "1994-02", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true, "notes": "农业-成长期：成长期5年（1994+5=1999成熟）。" },
+    { "id": "STK0021", "name": "玩家上市公司(动态)", "shortName": "自司", "sectorId": "fin", "listingYearMonth": "1990-01", "basePrice": 1, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0, "isFictional": true, "isPlayerCompany": true, "notes": "v0.4：未上市时由 UI 从行情表移除，上市后由主流程合并。" }
   ],
   "futures": {
     "defaultVariantId": "composite",

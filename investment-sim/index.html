@@ -8,7 +8,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" href="data:," />
-  <title>投资公司发展物语 V2.0 — 0.2</title>
+  <title>投资公司发展物语 V2.0 — 0.4</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -451,6 +451,18 @@
     }
     .talent-card-name { font-weight: 700; color: #ffeaac; margin-bottom: 0.25rem; }
     .talent-card-meta { color: #ac9e7e; margin: 0.15rem 0; }
+    /* GM 调试面板样式 */
+    .gm-button {
+      position: fixed; right: 18px; bottom: 18px; z-index:1200; width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:18px; background:#ff6b6b; color:#fff; border:0; box-shadow:0 6px 18px rgba(0,0,0,0.5); cursor:pointer;
+    }
+    .gm-button.gm-visible { outline:3px solid rgba(255,107,107,0.18); }
+    .gm-panel { position: fixed; right: 18px; bottom: 76px; z-index:1200; width:420px; max-height:60vh; background:#2a1a18; border:2px solid #ff6b6b; border-radius:12px; padding:10px; color:#fff; box-shadow:0 20px 40px rgba(0,0,0,0.6); }
+    .gm-panel.hidden { display:none; }
+    .gm-panel .gm-header { display:flex; justify-content:space-between; align-items:center; font-weight:700; color:#ffd966; }
+    .gm-panel .gm-cmd { width:calc(100% - 90px); padding:8px; border-radius:8px; border:1px solid #6b4a3a; background:#221712; color:#fff; }
+    .gm-panel .gm-exec { margin-left:6px; padding:8px 10px; border-radius:8px; background:#bd7a3a; color:#fff; border:0; }
+    .gm-log { margin-top:8px; max-height:38vh; overflow:auto; font-size:0.85rem; color:#ffd966; }
+    .gm-log-line { margin:0.25rem 0; }
   </style>
 </head>
 <body>
@@ -459,7 +471,7 @@
 
   <!-- B+C区域容器 -->
   <div class="game-container">
-    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">0.2</span></h1>
+    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">0.4</span></h1>
     <p class="game-sub">表驱动可复现结算 · 设计文档见仓库根目录</p>
 
     <div class="main-layout">
@@ -495,6 +507,6 @@
   </div>
 
   <!-- 修改任意 investment-sim/js 下文件后，请把 v= 加 1，强制浏览器拉取新模块（避免只缓存旧 main） -->
-  <script type="module" src="./js/main.js?v=0.2.12"></script>
+  <script type="module" src="./js/main.js?v=0.4.0"></script>
 </body>
 </html>

@@ -40,6 +40,18 @@ import {
   tickMajorStack,
   rollMinorEvent,
 } from './events.js';
+import {
+  calculateTotalAssetWan,
+  getCompanyValuationWan,
+  ensureCompanyEquity,
+  processListingOnMonthStart,
+  processEquityIssuanceOnMonthStart,
+  updateListedSharePriceAfterSettlement,
+  appendMonthlyNetProfitChange,
+  applyDilutionOnFundraisingSuccess,
+  maybeGenerateAnnualReport,
+} from './companyEquity.js';
+import { tryNpcInvestment, expireNpcIfNeeded } from './npcInvestors.js';
 
 function compareYm(a, y, m) {
   if (a.year !== y) return a.year - y;
@@ -85,6 +97,8 @@ export function runMonthOpening(state) {
 
   // 记录月初现金（扣款前，用于月度报告计算）
   state._monthStartCashWan = roundWan(state.companyCashWan);
+  /** 扣款前总资产，用于滚动月度净利润（v0.4 上市条件 / 股价） */
+  state._monthStartTotalAssetWan = calculateTotalAssetWan(state);
 
   state.companyCashWan = roundWan(state.companyCashWan - mustPay);
   appendLog(
@@ -108,6 +122,20 @@ export function runMonthOpening(state) {
   } catch (e) {
     // 若阶段检测出现错误，不阻塞月度流程
     console.error('checkPhaseTransition error', e);
+  }
+
+  // v0.4：股份、上市准备、增发、NPC、年报
+  try {
+    ensureCompanyEquity(state);
+    processEquityIssuanceOnMonthStart(state);
+    processListingOnMonthStart(state);
+    expireNpcIfNeeded(state);
+    if ((state.month | 0) === 1) {
+      maybeGenerateAnnualReport(state);
+    }
+    tryNpcInvestment(state);
+  } catch (e) {
+    console.error('v0.4 month opening hooks', e);
   }
 
   state.phase = 'market';
@@ -152,16 +180,43 @@ export function addActiveBusiness(state, orderDraft, config) {
 
   // 支持多月的拉投资（fundraising）——基于员工领导力决定周期并设定目标募集金额
   if (orderDraft.kind === 'fundraising') {
-    const id = nextId(state, 'b');
-    if (typeof state.businessRngSlotSeq !== 'number') state.businessRngSlotSeq = 0;
-    const rngOrderSlot = state.businessRngSlotSeq++;
+    const ce = ensureCompanyEquity(state);
+    if (ce.isListed) {
+      return { ok: false, error: '已上市，请使用增发股票筹资（或回购）；不再开展拉投资' };
+    }
+    const stg = ce.listingProgress?.stage;
+    if (stg === 'applying' || stg === 'preparing') {
+      return { ok: false, error: '上市申请或准备期内不可开展拉投资' };
+    }
+    if (state.pendingFundraisingConfirmation) {
+      return { ok: false, error: '请先处理待确认的拉投资弹窗' };
+    }
     const leadership = emp.leadership || 0;
-    // 领导力越高，周期越短：leadership 1 -> 6 个月，6+ -> 1 个月（映射为 7 - leadership，至少 1）
     const totalMonths = Math.max(1, 7 - leadership);
-    // 目标募集金额（万）：基础 10 万 + leadership*5 + reputation*0.5 + 随机 0..20
     const randAdd = Math.round(Math.random() * 20);
     const expectedFundWan = roundWan(10 + leadership * 5 + (state.reputation || 0) * 0.5 + randAdd);
 
+    const EQUITY_THRESHOLD = 50;
+    if (expectedFundWan + 1e-9 >= EQUITY_THRESHOLD) {
+      const valuationWan = getCompanyValuationWan(state);
+      const denom = valuationWan * 1.5;
+      const base = denom > 1e-9 ? (expectedFundWan / denom) * 100 : 0;
+      const equityPercent = Math.round(Math.max(0, base) * 100) / 100;
+      state.pendingFundraisingConfirmation = {
+        employeeId: emp.id,
+        employeeName: emp.name,
+        leadership,
+        totalMonths,
+        expectedFundWan,
+        equityPercent,
+        valuationWan,
+      };
+      return { ok: false, needsConfirmation: true };
+    }
+
+    const id = nextId(state, 'b');
+    if (typeof state.businessRngSlotSeq !== 'number') state.businessRngSlotSeq = 0;
+    const rngOrderSlot = state.businessRngSlotSeq++;
     state.activeBusinesses.push({
       id,
       employeeId: emp.id,
@@ -280,6 +335,46 @@ export function addActiveBusiness(state, orderDraft, config) {
   if (orderDraft.kind === 'stock' && stockPortfolio.length) {
     emp.lastRebalanceMonth = miOpen;
   }
+  return { ok: true };
+}
+
+/**
+ * 拉投资 ≥50 万需确认；确认后开展业务，稀释仅在募集成功时应用（见 settlement）
+ */
+export function confirmFundraisingWithEquity(state, accept) {
+  const pending = state.pendingFundraisingConfirmation;
+  if (!pending) return { ok: false, error: '无待确认的拉投资' };
+  if (!accept) {
+    state.pendingFundraisingConfirmation = null;
+    return { ok: false, cancelled: true };
+  }
+  const emp2 = state.employees.find((e) => e.id === pending.employeeId);
+  if (!emp2 || !employeeCanDeploy(state, emp2)) {
+    state.pendingFundraisingConfirmation = null;
+    return { ok: false, error: '员工不可新开业务' };
+  }
+  const id = nextId(state, 'b');
+  if (typeof state.businessRngSlotSeq !== 'number') state.businessRngSlotSeq = 0;
+  const rngOrderSlot = state.businessRngSlotSeq++;
+  const pct = Number(pending.equityPercent) || 0;
+  state.activeBusinesses.push({
+    id,
+    employeeId: pending.employeeId,
+    kind: 'fundraising',
+    initialWan: 0,
+    aumWan: 0,
+    profitPolicy: 'remit',
+    totalMonths: pending.totalMonths,
+    elapsedMonths: 0,
+    expectedFundWan: pending.expectedFundWan,
+    rngOrderSlot,
+    equityOnSuccess: { percent: pct, name: '跟投方' },
+  });
+  state.pendingFundraisingConfirmation = null;
+  appendLog(
+    state,
+    `【开业】${emp2.name} 开展 拉投资（目标 ${pending.expectedFundWan} 万，周期 ${pending.totalMonths} 个月，成功时约出让 ${pct}% 股份）。`,
+  );
   return { ok: true };
 }
 
@@ -547,6 +642,7 @@ export function runSettlement(state, config) {
           const ok = Math.random() < successChance;
           if (ok) {
             state.companyCashWan = roundWan(state.companyCashWan + (ord.expectedFundWan || 0));
+            applyDilutionOnFundraisingSuccess(state, ord);
             appendLog(state, `【拉投·成功】${emp.name} 完成拉投资，募集到 ${ord.expectedFundWan || 0} 万。`);
             emp.experienceMonths += 3;
             emp.leadership = Math.min(10, (emp.leadership || 0) + 1);
@@ -683,6 +779,18 @@ export function runSettlement(state, config) {
 
   settleDividends(state, config);
   runEmployeeAiRebalance(state, config);
+
+  try {
+    updateListedSharePriceAfterSettlement(state);
+  } catch (e) {
+    console.error('updateListedSharePriceAfterSettlement', e);
+  }
+
+  try {
+    appendMonthlyNetProfitChange(state);
+  } catch (e) {
+    console.error('appendMonthlyNetProfitChange', e);
+  }
 
   for (const emp of state.employees) {
     emp.experienceMonths += 1;

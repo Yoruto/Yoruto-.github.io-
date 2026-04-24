@@ -22,6 +22,7 @@ import { runRefreshTalentPool, runHireFromTalent, TALENT_REFRESH_COST_WAN } from
 import {
   runMonthOpening,
   addActiveBusiness,
+  confirmFundraisingWithEquity,
   closeActiveBusiness,
   setBusinessProfitPolicy,
   applyGuidance,
@@ -39,7 +40,22 @@ import {
   employeeCanDeploy,
   hasActiveBusiness,
 } from './core/monthEngine.js';
+import {
+  ensureCompanyEquity,
+  getPlayerCompanyStockDef,
+  PLAYER_STOCK_ID,
+  renameCompany,
+  checkListingEligibility,
+  applyForListing,
+  cancelListingApplication,
+  applyForEquityIssuance,
+  buyOwnCompanyShares,
+  sellOwnCompanyShares,
+} from './core/companyEquity.js';
+import { acceptNpcInvestment, rejectNpcInvestment } from './core/npcInvestors.js';
 import { saveToLocal, loadFromLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
+import { initGM } from './core/gm.js';
+import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
@@ -87,7 +103,8 @@ const EMBEDDED_CONFIG = {
     { "id": "STK0017", "name": "绿源城市水务", "shortName": "绿源", "sectorId": "util", "listingYearMonth": "1993-05", "basePrice": 298.00, "matureYear": 1993, "matureBetaExtraBp": -300, "dividendRateAnnual": 0.045, "isFictional": true },
     { "id": "STK0018", "name": "净能环保", "shortName": "净能", "sectorId": "util", "listingYearMonth": "2002-08", "basePrice": 15.60, "matureYear": 2010, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.02, "isFictional": true },
     { "id": "STK0019", "name": "丰禾种业", "shortName": "丰禾", "sectorId": "agri", "listingYearMonth": "1990-08", "basePrice": 52.30, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.025, "isFictional": true },
-    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "1994-02", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true }
+    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "1994-02", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true },
+    { "id": "STK0021", "name": "玩家公司(未上市不显示)", "shortName": "自司", "sectorId": "fin", "listingYearMonth": "1990-01", "basePrice": 1, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0, "isFictional": true, "isPlayerCompany": true }
   ],
   "futures": {
     "defaultVariantId": "composite",
@@ -107,6 +124,7 @@ const BUSINESS_DISPLAY = {
   fut: '📊 期货',
   consulting: '💼 咨询服务',
   fundraising: '🤝 拉投资',
+  equity_issuance: '📤 增发股票',
   realestate: '🏠 房地产',
   startup_invest: '🚀 初创投资',
   ma_local: '🔗 并购',
@@ -143,6 +161,23 @@ function formatMoney(x) {
   if (x == null || !Number.isFinite(Number(x))) return '—';
   const v = Math.round(Number(x) * 10000) / 10000;
   return `${parseFloat(v.toFixed(4))} 万`;
+}
+
+/** 上市后合并玩家公司股票行到 config.stocks，供行情与组合引用 */
+function ensurePlayerStockInConfig() {
+  if (!config || !state) return;
+  const def = getPlayerCompanyStockDef(state);
+  if (!config.stocks) config.stocks = [];
+  const idx = config.stocks.findIndex((s) => s.id === PLAYER_STOCK_ID);
+  if (def) {
+    const ce = ensureCompanyEquity(state);
+    const yuan = Math.max(0.01, (ce.sharePriceWan || 0.0001) * 10000);
+    const row = { ...def, basePrice: yuan, dividendRateAnnual: 0, isFictional: true, isPlayerCompany: true };
+    if (idx >= 0) config.stocks[idx] = { ...config.stocks[idx], ...row };
+    else config.stocks.push(row);
+  } else if (idx >= 0) {
+    config.stocks.splice(idx, 1);
+  }
 }
 
 /** 月度报告弹窗（已结束月份） */
@@ -241,6 +276,93 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function renderV04Modals() {
+  const parts = [];
+  const p = state.pendingFundraisingConfirmation;
+  if (p) {
+    const ps = ensureCompanyEquity(state);
+    const ts = Math.max(1, ps.totalShares | 0);
+    const afterPlayer = ps.playerShares * (1 - p.equityPercent / 100);
+    parts.push(`<div class="month-report-overlay" id="v04-fund-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card" style="max-width:32rem">
+        <h2 class="section-title" style="margin-top:0">拉投资确认</h2>
+        <p>员工：<strong>${escapeHtml(p.employeeName)}</strong>（领导力 ${p.leadership}）</p>
+        <p>目标金额：<strong>${formatMoney(p.expectedFundWan)}</strong> · 周期 <strong>${p.totalMonths}</strong> 月</p>
+        <p class="hint">⚠️ 此目标需出让股份。成功时按下方比例稀释，失败不稀释。</p>
+        <p>参考估值约 <strong>${formatMoney(p.valuationWan)}</strong> · 预计出让 <strong>${p.equityPercent}%</strong></p>
+        <p>预计成功后您持股约 <strong>${((afterPlayer / ts) * 100).toFixed(2)}%</strong></p>
+        <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;">
+          <button type="button" class="small" data-action="confirm-fundraising" data-accept="0">取消</button>
+          <button type="button" class="primary" data-action="confirm-fundraising" data-accept="1">确认开展</button>
+        </div>
+      </div>
+    </div>`);
+  }
+  const n = state.pendingNpcInvestment;
+  if (n) {
+    parts.push(`<div class="month-report-overlay" id="v04-npc-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card" style="max-width:32rem">
+        <h2 class="section-title" style="margin-top:0">NPC 投资意向</h2>
+        <p><strong>${escapeHtml(n.npcDisplayName || n.npcName)}</strong>（${n.npcType}）</p>
+        <p style="font-size:0.85rem;color:#ac9e7e;">${escapeHtml(n.npcDescription || '')}</p>
+        <p>拟投资 <strong>${formatMoney(n.investmentWan)}</strong> · 约 <strong>${n.equityPercent}%</strong> 股份</p>
+        <p>参考估值 <strong>${formatMoney(n.valuationWan)}</strong></p>
+        <p class="hint">截止 ${n.expiresYear}-${String(n.expiresMonth).padStart(2, '0')}</p>
+        <div style="margin-top:1rem;display:flex;gap:0.5rem;justify-content:flex-end;">
+          <button type="button" class="small" data-action="npc-reject">拒绝</button>
+          <button type="button" class="primary" data-action="npc-accept">接受</button>
+        </div>
+      </div>
+    </div>`);
+  }
+  const l = state.pendingListingSuccessModal;
+  if (l) {
+    parts.push(`<div class="month-report-overlay" id="v04-ipo-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card" style="max-width:32rem">
+        <h2 class="section-title" style="margin-top:0">🎉 上市成功</h2>
+        <p><strong>${escapeHtml(l.companyName)}</strong> 已上市</p>
+        <p>IPO 价 <strong>${formatMoney(l.ipoPrice)}</strong> 万/股 · 总股本 ${(l.totalShares / 1e4).toFixed(0)} 万股</p>
+        <p>市值约 <strong>${formatMoney(l.marketCapWan)}</strong></p>
+        <div style="margin-top:1rem">
+          <button type="button" class="primary" data-action="dismiss-listing-success">好的</button>
+        </div>
+      </div>
+    </div>`);
+  }
+  const ar = state.pendingAnnualReport;
+  if (ar) {
+    const sh = (ar.shareholding || [])
+      .map((x) => `<tr><td>${escapeHtml(x.name)}</td><td>${(x.shares / 1e4).toFixed(2)} 万股</td><td>${x.percent}%</td></tr>`)
+      .join('');
+    parts.push(`<div class="month-report-overlay" id="v04-ar-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card" style="max-width:36rem;max-height:90vh;overflow:auto">
+        <h2 class="section-title" style="margin-top:0">年度报告 · ${ar.year} 年</h2>
+        <p>总资产 <strong>${formatMoney(ar.totalAssetsWan)}</strong> · 年净利润 <strong>${formatMoney(ar.annualProfitWan)}</strong> · ROE <strong>${(ar.roe * 100).toFixed(1)}%</strong></p>
+        ${ar.isListed ? `<p>股价 <strong>${formatMoney(ar.sharePrice)}</strong> 万/股 · 市值 <strong>${formatMoney(ar.marketCapWan)}</strong></p>` : ''}
+        <h3 class="section-title" style="font-size:0.95rem">股权结构</h3>
+        <table class="data-table"><thead><tr><th>股东</th><th>持股</th><th>比例</th></tr></thead><tbody>${sh || '<tr><td colspan="3">—</td></tr>'}</tbody></table>
+        <div style="margin-top:1rem">
+          <button type="button" class="primary" data-action="dismiss-annual-report">关闭</button>
+        </div>
+      </div>
+    </div>`);
+  }
+  const isu = state.pendingIssuanceSuccess;
+  if (isu) {
+    parts.push(`<div class="month-report-overlay" id="v04-iss-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card" style="max-width:32rem">
+        <h2 class="section-title" style="margin-top:0">增发完成</h2>
+        <p>增发 <strong>${(isu.sharesIssued / 1e4).toFixed(0)}</strong> 万股 · 价格 <strong>${formatMoney(isu.priceWan)}</strong> 万/股</p>
+        <p>募集 <strong>${formatMoney(isu.proceedsWan)}</strong> · 新股本共 <strong>${(isu.newTotalShares / 1e4).toFixed(0)}</strong> 万股</p>
+        <div style="margin-top:1rem">
+          <button type="button" class="primary" data-action="dismiss-issuance-success">好的</button>
+        </div>
+      </div>
+    </div>`);
+  }
+  return parts.join('');
 }
 
 function renderCompanyPhaseModal(modal) {
@@ -565,7 +687,14 @@ function renderNewBusinessView() {
   // Tile-first: 若未选中业务种类，展示磁贴选择
   if (!selectedNewBusinessKind) {
     // 根据当前公司阶段动态渲染可选业务磁贴
-    const unlockedKinds = (PHASE_UNLOCKS[state.companyPhase?.current || 'startup']?.businesses) || ['stock', 'fut', 'consulting', 'fundraising'];
+    const ce = ensureCompanyEquity(state);
+    let unlockedKinds = [...((PHASE_UNLOCKS[state.companyPhase?.current || 'startup']?.businesses) || ['stock', 'fut', 'consulting', 'fundraising'])];
+    if (ce.isListed) {
+      unlockedKinds = unlockedKinds.filter((k) => k !== 'fundraising');
+      if (!unlockedKinds.includes('equity_issuance')) unlockedKinds.push('equity_issuance');
+    } else {
+      unlockedKinds = unlockedKinds.filter((k) => k !== 'equity_issuance');
+    }
     const tilesHtml = unlockedKinds
       .map((k) => `<button type="button" class="biz-tile ${k==='stock'||k==='fut' ? 'primary' : ''}" data-action="select-newbiz" data-kind="${k}">${BUSINESS_DISPLAY[k] || k}</button>`)
       .join('');
@@ -582,14 +711,49 @@ function renderNewBusinessView() {
 
   // 已选中某种业务，显示指派表单（类型预选）
   const selKind = selectedNewBusinessKind;
-  // 可用业务选项（表单下拉）
-  const unlockedFormKinds = (PHASE_UNLOCKS[state.companyPhase?.current || 'startup']?.businesses) || ['stock','fut','consulting','fundraising'];
+  const ce0 = ensureCompanyEquity(state);
+  let unlockedFormKinds = (PHASE_UNLOCKS[state.companyPhase?.current || 'startup']?.businesses) || ['stock','fut','consulting','fundraising'];
+  if (ce0.isListed) {
+    unlockedFormKinds = unlockedFormKinds.filter((k) => k !== 'fundraising');
+    if (!unlockedFormKinds.includes('equity_issuance')) unlockedFormKinds.push('equity_issuance');
+  } else {
+    unlockedFormKinds = unlockedFormKinds.filter((k) => k !== 'equity_issuance');
+  }
   const selectOptionsHtml = unlockedFormKinds.map((k) => `<option value="${k}" ${selKind===k ? 'selected' : ''}>${BUSINESS_DISPLAY[k] || k}</option>`).join('');
+  const subTitle =
+    selKind === 'stock'
+      ? '股票'
+      : selKind === 'fut'
+        ? '期货'
+        : selKind === 'consulting'
+          ? '咨询'
+          : selKind === 'equity_issuance'
+            ? '增发股票'
+            : '拉投资';
+  if (selKind === 'equity_issuance') {
+    return `
+    <div class="view-section">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+        <button type="button" class="small" data-action="clear-newbiz">← 选择其他业务</button>
+        <h2 class="section-title">增发股票（已上市）</h2>
+      </div>
+      <div class="panel">
+        <p class="hint">向监管层提交增发申请，次月生效。冷却与价格上限见设计文档。</p>
+        <div class="flex-row" style="gap:0.75rem; flex-wrap:wrap;align-items:center">
+          <label>股数 <input type="number" id="dep-issue-sh" class="narrow" min="10000" step="1000" value="10000" /></label>
+          <label>价格(万/股) <input type="number" id="dep-issue-pr" class="narrow" min="0.0001" step="0.0001" value="${ce0.sharePriceWan}" /></label>
+        </div>
+        <div style="margin-top:0.6rem;">
+          <button type="button" class="primary" data-action="add-order-issuance">提交增发</button>
+        </div>
+      </div>
+    </div>`;
+  }
   return `
     <div class="view-section">
       <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
         <button type="button" class="small" data-action="clear-newbiz">← 选择其他业务</button>
-        <h2 class="section-title">新开：${selKind === 'stock' ? '股票' : selKind === 'fut' ? '期货' : selKind === 'consulting' ? '咨询' : '拉投资'}</h2>
+        <h2 class="section-title">新开：${subTitle}</h2>
       </div>
       <div class="panel">
         <div class="flex-row" style="gap:0.75rem; flex-wrap:wrap;">
@@ -780,6 +944,13 @@ function renderHrView() {
 
 // 7. 公司情况视图
 function renderCompanyView() {
+  const ce = ensureCompanyEquity(state);
+  const ps = Math.max(1, ce.totalShares | 0);
+  const playerPct = ((ce.playerShares | 0) / ps) * 100;
+  const listCheck = checkListingEligibility(state);
+  const st = ce.listingProgress?.stage || 'none';
+  const listLabel = { none: '未申请', applying: '审核中', preparing: '准备期', listed: '已上市' }[st] || st;
+
   const cap = getTotalCapacity(state);
   const officeOpts = ['standard', 'business', 'hq'].filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear);
   const leaseRows = state.offices
@@ -799,6 +970,39 @@ function renderCompanyView() {
   return `
     <div class="view-section">
       <h2 class="section-title">公司概览</h2>
+
+      <div class="panel" style="margin-bottom:0.75rem">
+        <h3 class="section-title">公司与股权 v0.4</h3>
+        <div class="flex-row" style="flex-wrap:wrap;gap:0.75rem;align-items:center">
+          <label>公司名
+            <input type="text" id="ce-company-name" class="narrow" value="${escapeHtml(ce.companyName || '')}" maxlength="10" style="min-width:8rem" ${ce.isListed || st === 'applying' || st === 'preparing' ? 'disabled' : ''} />
+            <button type="button" class="small" data-action="ce-rename" ${ce.isListed || st === 'applying' || st === 'preparing' ? 'disabled' : ''}>改名</button>
+          </label>
+        </div>
+        <p style="margin:0.5rem 0">玩家持股 <strong>${playerPct.toFixed(2)}%</strong>（${((ce.playerShares | 0) / 1e4).toFixed(2)} 万股 / 总 ${(ps / 1e4).toFixed(0)} 万股）${ce.isListed ? ` · 股价 <strong>${formatMoney(ce.sharePriceWan)}</strong> 万/股` : ''}</p>
+        <p class="hint">上市流程：<strong>${listLabel}</strong>${st === 'preparing' && ce.listingProgress?.monthsRemaining > 0 ? ` · 剩余 ${ce.listingProgress.monthsRemaining} 月` : ''}</p>
+        <div class="flex-row" style="flex-wrap:wrap;gap:0.5rem">
+          <button type="button" class="small" data-action="ce-apply-listing" ${st === 'none' && listCheck.eligible ? '' : 'disabled'} title="${listCheck.eligible ? '申请' : (listCheck.failedChecks || []).join(' · ') || '条件不足'}">申请上市</button>
+          <button type="button" class="small danger" data-action="ce-cancel-listing" ${st === 'applying' || st === 'preparing' ? '' : 'disabled'}>取消上市流程</button>
+        </div>
+        ${!listCheck.eligible && st === 'none' ? `<p class="hint" style="font-size:0.75rem">上市条件未满足：${(listCheck.failedChecks || []).join(' · ') || '—'}</p>` : ''}
+        ${ce.isListed ? `
+        <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid #5e4b34">
+          <h4 class="section-title" style="font-size:0.9rem">增发（冷却与审批见日志）</h4>
+          <div class="flex-row" style="flex-wrap:wrap;gap:0.5rem;align-items:center">
+            <label>股数 <input type="number" id="ce-issue-shares" class="narrow" min="10000" step="1000" value="10000" /></label>
+            <label>价格(万/股) <input type="number" id="ce-issue-price" class="narrow" min="0.0001" step="0.0001" value="${ce.sharePriceWan}" /></label>
+            <button type="button" data-action="ce-apply-issuance">提交增发</button>
+          </div>
+          <h4 class="section-title" style="font-size:0.9rem;margin-top:0.5rem">买卖自家股（v0.4 系统池）</h4>
+          <div class="flex-row" style="flex-wrap:wrap;gap:0.5rem;align-items:center">
+            <label>回购(万) <input type="number" id="ce-buy-wan" class="narrow" min="0.0001" step="0.1" value="1" /></label>
+            <button type="button" data-action="ce-buy-shares">回购</button>
+            <label>卖出(股) <input type="number" id="ce-sell-n" class="narrow" min="1" step="1" value="1" /></label>
+            <button type="button" data-action="ce-sell-shares">卖出</button>
+          </div>
+        </div>` : ''}
+      </div>
 
       <div class="overview-stats">
         <div class="stat-box">
@@ -927,6 +1131,8 @@ function render() {
     return;
   }
 
+  ensurePlayerStockInConfig();
+
   if (state.gameOver) {
     if (dock) dock.innerHTML = '';
     if (sidebar) sidebar.classList.add('hidden');
@@ -944,12 +1150,19 @@ function render() {
   }
 
   const cap = getTotalCapacity(state);
+  const v04BlockModal =
+    state.pendingFundraisingConfirmation ||
+    state.pendingNpcInvestment ||
+    state.pendingListingSuccessModal ||
+    state.pendingAnnualReport ||
+    state.pendingIssuanceSuccess;
   const canNext =
     state.phase !== 'margin' &&
     !state.pendingMargin.length &&
     !state.gameOver &&
     !state.victory &&
-    !state.showMonthReport;
+    !state.showMonthReport &&
+    !v04BlockModal;
 
   // ========== A区域: 顶栏（含宏观行情）==========
   if (dock) {
@@ -1007,7 +1220,8 @@ function render() {
   const renderer = viewRenderers[currentView] || renderMarketView;
   const reportModal = state.showMonthReport && state.monthReportData ? renderMonthReportModal(state.monthReportData) : '';
   const companyPhaseModal = state.pendingCompanyPhaseModal ? renderCompanyPhaseModal(state.pendingCompanyPhaseModal) : '';
-  root.innerHTML = marginBlock + renderer() + reportModal + companyPhaseModal;
+  const v04Modals = renderV04Modals();
+  root.innerHTML = marginBlock + renderer() + reportModal + companyPhaseModal + v04Modals;
 
   // 绑定事件
   bindActions(root);
@@ -1033,6 +1247,11 @@ function wireKindToggle(root) {
   if (!kind) return;
   const sync = () => {
     const k = kind.value;
+    if (k === 'equity_issuance') {
+      selectedNewBusinessKind = 'equity_issuance';
+      render();
+      return;
+    }
     $('#dep-fut-wrap', root)?.classList.toggle('hidden', k !== 'fut');
     $('#dep-stock-wrap', root)?.classList.toggle('hidden', k !== 'stock');
     $('#dep-consult-wrap', root)?.classList.toggle('hidden', k !== 'consulting');
@@ -1247,6 +1466,15 @@ function onAction(ev) {
     render();
     return;
   }
+  if (action === 'add-order-issuance') {
+    const sh = Number($('#dep-issue-sh')?.value);
+    const pr = Number($('#dep-issue-pr')?.value);
+    const r = applyForEquityIssuance(state, sh, pr);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
   if (action === 'add-order') {
     const kind = $('#dep-kind')?.value;
     const draft = {
@@ -1268,7 +1496,99 @@ function onAction(ev) {
       delete draft.allocWan;
     }
     const res = addActiveBusiness(state, draft, config);
+    if (res?.needsConfirmation) {
+      saveToLocal(state);
+      render();
+      return;
+    }
     if (!res.ok) alert(res.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'confirm-fundraising') {
+    const accept = ev.currentTarget.getAttribute('data-accept') === '1';
+    const r = confirmFundraisingWithEquity(state, accept);
+    if (!r.ok && !r.cancelled) alert(r.error || '已取消');
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'npc-accept') {
+    const r = acceptNpcInvestment(state);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'npc-reject') {
+    rejectNpcInvestment(state);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'dismiss-listing-success') {
+    state.pendingListingSuccessModal = null;
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'dismiss-annual-report') {
+    state.pendingAnnualReport = null;
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'dismiss-issuance-success') {
+    state.pendingIssuanceSuccess = null;
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'ce-rename') {
+    const v = ($('#ce-company-name')?.value || '').trim();
+    const r = renameCompany(state, v);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'ce-apply-listing') {
+    const r = applyForListing(state);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'ce-cancel-listing') {
+    if (!confirm('确认取消？已付费用不退。')) return;
+    const r = cancelListingApplication(state);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'ce-apply-issuance') {
+    const sh = Number($('#ce-issue-shares')?.value);
+    const pr = Number($('#ce-issue-price')?.value);
+    const r = applyForEquityIssuance(state, sh, pr);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'ce-buy-shares') {
+    const w = Number($('#ce-buy-wan')?.value);
+    const r = buyOwnCompanyShares(state, w);
+    if (!r.ok) alert(r.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'ce-sell-shares') {
+    const n = Number($('#ce-sell-n')?.value);
+    const r = sellOwnCompanyShares(state, n);
+    if (!r.ok) alert(r.error);
     saveToLocal(state);
     render();
     return;
@@ -1553,6 +1873,27 @@ async function bootstrap() {
     // saveToLocal(state); // 屏蔽自动保存
   }
   render();
+
+  // 初始化 GM（调试命令面板）
+  try {
+    const gm = initGM({
+      getState: () => state,
+      saveAndRender: () => { saveToLocal(state); render(); },
+      addBusiness: (draft) => addActiveBusiness(state, draft, config),
+      closeBusiness: (id) => closeActiveBusiness(state, id),
+      endTurn: () => endTurn(state, config),
+      exportJson: () => exportJson(state),
+      importJson: (t) => importJson(t),
+      applyForListing: () => applyForListing(state),
+      ensureCompanyEquity: () => ensureCompanyEquity(state),
+    });
+    const ui = bindGMUI(gm);
+    const btn = renderGMButton();
+    // 初始隐藏按钮，按 ` 打开
+    btn.style.display = 'none';
+  } catch (e) {
+    console.warn('GM 初始化失败', e);
+  }
 }
 
 bootstrap();

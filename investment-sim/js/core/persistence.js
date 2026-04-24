@@ -1,5 +1,7 @@
+import { createDefaultCompanyEquity } from './companyEquity.js';
+
 /** 开发版存档键；更换即丢弃旧 localStorage，不做迁移 */
-const STORAGE_KEY = 'investment-sim-dev-v4';
+const STORAGE_KEY = 'investment-sim-dev-v5';
 
 /** 历史键：加载时删除 */
 const LEGACY_STORAGE_KEYS = ['investment-company-v2-save', 'investment-sim-dev-save'];
@@ -108,6 +110,20 @@ export function loadFromLocal() {
       }
     } catch (e) {
       console.warn('businesses migration failed', e);
+    }
+    // v0.4：公司股权、弹窗位
+    try {
+      if (s && typeof s === 'object' && !s.companyEquity) {
+        s.companyEquity = createDefaultCompanyEquity();
+        s.pendingFundraisingConfirmation = s.pendingFundraisingConfirmation ?? null;
+        s.pendingNpcInvestment = s.pendingNpcInvestment ?? null;
+        s.pendingListingSuccessModal = s.pendingListingSuccessModal ?? null;
+        s.pendingAnnualReport = s.pendingAnnualReport ?? null;
+        s.pendingIssuanceSuccess = s.pendingIssuanceSuccess ?? null;
+        if (!s.schemaVersion || s.schemaVersion < 6) s.schemaVersion = 6;
+      }
+    } catch (e) {
+      console.warn('v0.4 state migration', e);
     }
     return s;
   } catch {
