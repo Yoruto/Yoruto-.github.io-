@@ -34,10 +34,10 @@ export function recruitTierAllowed(year, tier) {
 
 export function canPromote(emp) {
   if (emp.tier === 'junior') {
-    return emp.experienceMonths >= 24 && emp.ability >= 5;
+    return emp.experienceMonths >= 24 && ((emp.leadership || 0) + (emp.innovation || 0) + (emp.execution || 0)) / 3 >= 5;
   }
   if (emp.tier === 'mid') {
-    return emp.experienceMonths >= 60 && emp.ability >= 7;
+    return emp.experienceMonths >= 60 && ((emp.leadership || 0) + (emp.innovation || 0) + (emp.execution || 0)) / 3 >= 7;
   }
   return false;
 }
@@ -57,6 +57,10 @@ export function createInitialState(gameSeed) {
     name: n1,
     tier: 'junior',
     ability: 5,
+    leadership: 3,
+    innovation: 3,
+    execution: 3,
+    industryTech: { finance: 5, realestate: 5, tech: 5, semiconductor: 5, consumer: 5, medical: 5, energy: 5, aerospace: 5 },
     loyalty: 6,
     experienceMonths: 0,
     hiredYearMonth: { year: 1990, month: 1 },
@@ -71,6 +75,10 @@ export function createInitialState(gameSeed) {
     name: n2,
     tier: 'junior',
     ability: 4,
+    leadership: 3,
+    innovation: 2,
+    execution: 3,
+    industryTech: { finance: 5, realestate: 5, tech: 5, semiconductor: 5, consumer: 5, medical: 5, energy: 5, aerospace: 5 },
     loyalty: 7,
     experienceMonths: 0,
     hiredYearMonth: { year: 1990, month: 1 },
@@ -88,6 +96,15 @@ export function createInitialState(gameSeed) {
     year: 1990,
     month: 1,
     phase: 'opening',
+    // 公司发展阶段（startup | expansion | mature）——与 UI 的交互阶段 `phase` 区分
+    companyPhase: {
+      current: 'startup',
+      lastCheckedMonth: 0,
+      unlockedFeatures: [],
+      history: [],
+    },
+    // 弹窗数据：当晋升发生时写入，由 UI 渲染并清除
+    pendingCompanyPhaseModal: null,
     companyCashWan: 80,
     reputation: 50,
     offices: [
@@ -126,6 +143,46 @@ export function createInitialState(gameSeed) {
     majorEventNote: '',
     allowMinorEventThisMonth: true,
   };
+}
+
+/**
+ * 将旧版本员工迁移到 v0.3 员工模型（保留 ability 作只读历史值）
+ */
+export function migrateEmployeeFromV02(oldEmployee) {
+  const oldAbility = oldEmployee.ability || 5;
+  const base = Math.max(1, Math.min(10, Math.round(oldAbility)));
+  // 将旧 ability 按照 3 维平均分配并加上小幅随机波动
+  const rnd = Math.floor(Math.random() * 3) - 1; // -1..1
+  const leadership = Math.max(1, Math.min(10, Math.ceil((base / 3) * (0.9 + Math.random() * 0.2))));
+  const innovation = Math.max(1, Math.min(10, Math.ceil((base / 3) * (0.9 + Math.random() * 0.2))));
+  const execution = Math.max(1, Math.min(10, Math.ceil((base / 3) * (0.9 + Math.random() * 0.2))));
+  const industryTech = {
+    finance: Math.floor(Math.random() * 10) + 5,
+    realestate: Math.floor(Math.random() * 10) + 5,
+    tech: Math.floor(Math.random() * 10) + 5,
+    semiconductor: Math.floor(Math.random() * 10) + 5,
+    consumer: Math.floor(Math.random() * 10) + 5,
+    medical: Math.floor(Math.random() * 10) + 5,
+    energy: Math.floor(Math.random() * 10) + 5,
+    aerospace: Math.floor(Math.random() * 10) + 5,
+  };
+  return Object.assign({}, oldEmployee, { leadership, innovation, execution, industryTech });
+}
+
+/**
+ * 计算员工对某业务的等效能力值（1..10），使用 BUSINESS_ABILITY_WEIGHTS 表
+ */
+import { BUSINESS_ABILITY_WEIGHTS } from './tables.js';
+export function computeBusinessAbility(emp, businessKind) {
+  const weights = BUSINESS_ABILITY_WEIGHTS[businessKind] || { leadership: 0.33, execution: 0.33, innovation: 0.34 };
+  const l = emp.leadership || 0;
+  const e = emp.execution || 0;
+  const i = emp.innovation || 0;
+  const weighted = l * (weights.leadership || 0) + e * (weights.execution || 0) + i * (weights.innovation || 0);
+  const sumW = (weights.leadership || 0) + (weights.execution || 0) + (weights.innovation || 0) || 1;
+  // normalized in 1..10
+  const normalized = Math.max(1, Math.min(10, Math.round(weighted / sumW)));
+  return normalized;
 }
 
 export function getTotalCapacity(state) {

@@ -50,11 +50,11 @@ export const NOISE_BP = Object.freeze([
 /** 招聘费（万元） */
 export const RECRUIT_COST_WAN = { junior: 5, mid: 8, senior: 15 };
 
-/** 0.2：员工作单最大管理规模（万），股票/期货共用该上限，另受业务类型上界（股票100/期货50） */
+/** 0.2：员工作单最大管理规模（万），股票/期货共用该上限 */
 export const EMPLOYEE_TIER_MAX_AUM_WAN = {
-  junior: 50,
-  mid: 500,
-  senior: 1000,
+  junior: 500,
+  mid: 5000,
+  senior: 50000,
 };
 
 export function getEmployeeMaxAumWan(emp) {
@@ -107,3 +107,68 @@ export const SEVERANCE_MONTHS_PAY = 3;
 
 /** 退租返还：月租比例（占位） */
 export const LEASE_DEPOSIT_RETURN_RATIO = 0.5;
+
+/** 公司发展阶段解锁表（用于 UI 过滤与解锁显示） */
+export const PHASE_UNLOCKS = {
+  startup: {
+    businesses: ['stock', 'fut', 'consulting', 'fundraising'],
+    employeeTiers: ['junior'],
+    officeTypes: ['small'],
+    features: ['basic_hr', 'basic_training'],
+  },
+  expansion: {
+    businesses: ['stock', 'fut', 'consulting', 'fundraising', 'realestate', 'startup_invest', 'ma_local', 'rnd', 'business_group'],
+    employeeTiers: ['junior', 'mid'],
+    officeTypes: ['small', 'standard', 'business'],
+    features: ['advanced_hr', 'advanced_training', 'loans'],
+  },
+  mature: {
+    businesses: ['stock', 'fut', 'consulting', 'fundraising', 'realestate', 'startup_invest', 'ma_local', 'rnd', 'business_group', 'overseas', 'ma_global', 'ipo'],
+    employeeTiers: ['junior', 'mid', 'senior'],
+    officeTypes: ['small', 'standard', 'business', 'hq'],
+    features: ['advanced_hr', 'advanced_training', 'loans', 'global_operations', 'challenge_mode'],
+  },
+};
+
+/** 8 个行业定义（显示名与图标） */
+export const INDUSTRIES = {
+  finance: { name: '金融', icon: '💰' },
+  realestate: { name: '地产', icon: '🏘️' },
+  tech: { name: '科技/互联网', icon: '💻' },
+  semiconductor: { name: '半导体', icon: '🔌' },
+  consumer: { name: '消费电子', icon: '📱' },
+  medical: { name: '医疗', icon: '🏥' },
+  energy: { name: '能源', icon: '⚡' },
+  aerospace: { name: '航天/汽车', icon: '🚀' },
+};
+
+/** 业务能力权重（用于不同业务按不同维度加权） */
+export const BUSINESS_ABILITY_WEIGHTS = {
+  stock: { leadership: 0.5, execution: 0.5, innovation: 0 },
+  fut: { leadership: 0.3, execution: 0.7, innovation: 0 },
+  consulting: { leadership: 0.8, execution: 0.2, innovation: 0 },
+  fundraising: { leadership: 1.0, execution: 0, innovation: 0 },
+  realestate: { leadership: 0.4, execution: 0.6, innovation: 0 },
+  startup_invest: { leadership: 0.2, execution: 0.2, innovation: 0.6 },
+  rnd: { leadership: 0.2, execution: 0.3, innovation: 0.5 },
+  ma: { leadership: 0.9, execution: 0.1, innovation: 0 },
+};
+
+/** 行业技术对业务的加成率（每点技术给出的万分比加成比例，可在结算中使用） */
+export const BUSINESS_INDUSTRY_BOOST = {
+  stock: 0.3,
+  fut: 0.2,
+  consulting: 0.5,
+  fundraising: 0,
+  realestate: 0.4,
+  startup_invest: 0.4,
+  rnd: 0.6,
+  ma: 0.3,
+};
+
+/** 晋升规则示例 */
+export const PROMOTION_RULES = {
+  junior_to_mid: { expMonths: 24, abilitySum: 12 },
+  mid_to_senior: { expMonths: 60, abilitySum: 20, techRequirement: { minValue: 50, count: 1 } },
+};
+

@@ -10,6 +10,7 @@ import {
   computePortfolioSectorBp,
   doesStockPayDividend,
   getStockBetaExtraBp,
+  calculateConsultingRevenue,
 } from './settlement.js';
 import { generateRandomPartialStockPortfolio, STOCK_PARTIAL_SLEEVE_BP } from './rng.js';
 import {
@@ -23,6 +24,7 @@ import {
   trainingCostWan,
   canPromote,
   SCHEMA_VERSION,
+  computeBusinessAbility,
 } from './state.js';
 import {
   OFFICE_GRADES,
@@ -31,6 +33,7 @@ import {
 } from './tables.js';
 import { buildMonthReportData } from './monthReport.js';
 import { buildAiStockPortfolio, REBALANCE_INTERVAL_MONTHS } from './employeeAI.js';
+import { checkPhaseTransition } from './phase.js';
 import {
   pushDueMajorEvents,
   applyMajorStackToC,
@@ -99,6 +102,14 @@ export function runMonthOpening(state) {
   state.predictedEquityC = rollPredictedC(state.gameSeed, idx + 1, 'equity');
   state.predictedCommodityC = rollPredictedC(state.gameSeed, idx + 1, 'commodity');
 
+  // 在进入 market 阶段前，检查公司发展阶段（初创/扩张/成熟）是否发生变更
+  try {
+    checkPhaseTransition(state);
+  } catch (e) {
+    // 若阶段检测出现错误，不阻塞月度流程
+    console.error('checkPhaseTransition error', e);
+  }
+
   state.phase = 'market';
 }
 
@@ -119,21 +130,56 @@ export function addActiveBusiness(state, orderDraft, config) {
   const emp = state.employees.find((e) => e.id === orderDraft.employeeId);
   if (!emp || !employeeCanDeploy(state, emp)) return { ok: false, error: '员工不可新开业务' };
 
-  const alloc = Number(orderDraft.allocWan);
-  if (!Number.isFinite(alloc) || alloc <= 0) return { ok: false, error: '金额无效' };
-
-  const maxByTier = getEmployeeMaxAumWan(emp);
-  if (orderDraft.kind === 'stock') {
-    const cap = Math.min(100, maxByTier);
-    if (alloc < 1 || alloc > cap) {
-      return { ok: false, error: `股票调拨须在 1~${cap} 万（该员工等级与规则上限取低）` };
-    }
-  } else {
-    const cap = Math.min(50, maxByTier);
-    if (alloc < 1 || alloc > cap) {
-      return { ok: false, error: `期货调拨须在 1~${cap} 万（该员工等级与规则上限取低）` };
-    }
+  // 支持当月结的咨询服务（无需资金调拨）
+  if (orderDraft.kind === 'consulting') {
+    const id = nextId(state, 'b');
+    if (typeof state.businessRngSlotSeq !== 'number') state.businessRngSlotSeq = 0;
+    const rngOrderSlot = state.businessRngSlotSeq++;
+    state.activeBusinesses.push({
+      id,
+      employeeId: emp.id,
+      kind: 'consulting',
+      initialWan: 0,
+      aumWan: 0,
+      profitPolicy: 'remit',
+      industry: orderDraft.industry || 'finance',
+      rngOrderSlot,
+      oneOff: true,
+    });
+    appendLog(state, `【开业】${emp.name} 开展 咨询服务（${orderDraft.industry || '未知行业'}）。`);
+    return { ok: true };
   }
+
+  // 支持多月的拉投资（fundraising）——基于员工领导力决定周期并设定目标募集金额
+  if (orderDraft.kind === 'fundraising') {
+    const id = nextId(state, 'b');
+    if (typeof state.businessRngSlotSeq !== 'number') state.businessRngSlotSeq = 0;
+    const rngOrderSlot = state.businessRngSlotSeq++;
+    const leadership = emp.leadership || 0;
+    // 领导力越高，周期越短：leadership 1 -> 6 个月，6+ -> 1 个月（映射为 7 - leadership，至少 1）
+    const totalMonths = Math.max(1, 7 - leadership);
+    // 目标募集金额（万）：基础 10 万 + leadership*5 + reputation*0.5 + 随机 0..20
+    const randAdd = Math.round(Math.random() * 20);
+    const expectedFundWan = roundWan(10 + leadership * 5 + (state.reputation || 0) * 0.5 + randAdd);
+
+    state.activeBusinesses.push({
+      id,
+      employeeId: emp.id,
+      kind: 'fundraising',
+      initialWan: 0,
+      aumWan: 0,
+      profitPolicy: 'remit',
+      totalMonths,
+      elapsedMonths: 0,
+      expectedFundWan,
+      rngOrderSlot,
+    });
+    appendLog(state, `【开业】${emp.name} 开展 拉投资（目标 ${expectedFundWan} 万，周期 ${totalMonths} 个月）。`);
+    return { ok: true };
+  }
+
+  const alloc = Number(orderDraft.allocWan);
+  if (!Number.isFinite(alloc) || alloc < 1) return { ok: false, error: '金额无效（至少 1 万）' };
 
   if (state.companyCashWan + 1e-9 < alloc) return { ok: false, error: '公司现金不足' };
 
@@ -321,15 +367,6 @@ export function applyGuidance(state, businessId, patch, config) {
         }
       }
     }
-    const emp0 = state.employees.find((e) => e.id === b.employeeId);
-    if (emp0) {
-      const testAum = roundWan(b.aumWan + aumDelta);
-      const cap =
-        b.kind === 'fut' ? Math.min(50, getEmployeeMaxAumWan(emp0)) : Math.min(100, getEmployeeMaxAumWan(emp0));
-      if (testAum - cap > 1e-9) {
-        return { ok: false, error: `增资后 AUM 不可超过该员工管理上限（${cap} 万）` };
-      }
-    }
     state.companyCashWan = roundWan(state.companyCashWan - aumDelta);
     b.aumWan = roundWan(b.aumWan + aumDelta);
     if (b.profitPolicy === 'remit') b.initialWan = roundWan(b.initialWan + aumDelta);
@@ -474,6 +511,58 @@ export function runSettlement(state, config) {
     const emp = state.employees.find((e) => e.id === ord.employeeId);
     if (!emp) continue;
 
+    // 处理当月结的咨询服务（短期业务）
+    if (ord.kind === 'consulting') {
+      try {
+        const rev = calculateConsultingRevenue(emp, ord.industry || 'finance');
+        state.companyCashWan = roundWan(state.companyCashWan + rev);
+        appendLog(state, `【咨询】${emp.name} 完成 ${ord.industry || '行业'} 报告，获得 ${rev} 万。`);
+        // 能力成长：行业技术 +1；领导力 10% 概率 +1
+        if (!emp.industryTech) emp.industryTech = {};
+        emp.industryTech[ord.industry] = Math.min(100, (emp.industryTech[ord.industry] || 0) + 1);
+        if (Math.random() < 0.1) {
+          emp.leadership = Math.min(10, (emp.leadership || 0) + 1);
+          appendLog(state, `【成长】${emp.name} 的领导力小幅提升至 ${emp.leadership}。`);
+        }
+        emp.experienceMonths += 1;
+      } catch (e) {
+        console.error('consulting settle error', e);
+      }
+      // 移除一次性业务
+      const idx = state.activeBusinesses.findIndex((b) => b.id === ord.id);
+      if (idx >= 0) state.activeBusinesses.splice(idx, 1);
+      continue;
+    }
+
+    // 处理多月的拉投资业务（推进周期并在完成时判定）
+    if (ord.kind === 'fundraising') {
+      try {
+        ord.elapsedMonths = (ord.elapsedMonths || 0) + 1;
+        appendLog(state, `【拉投·进度】${emp.name} 的拉投资进展：${ord.elapsedMonths}/${ord.totalMonths} 月。`);
+        if (ord.elapsedMonths >= (ord.totalMonths || 1)) {
+          // 成功概率：基础 30% + 5% * leadership + 1% * reputation（上限 95%）
+          const leadership = emp.leadership || 0;
+          let successChance = 0.3 + 0.05 * leadership + 0.01 * (state.reputation || 0);
+          successChance = Math.min(0.95, successChance);
+          const ok = Math.random() < successChance;
+          if (ok) {
+            state.companyCashWan = roundWan(state.companyCashWan + (ord.expectedFundWan || 0));
+            appendLog(state, `【拉投·成功】${emp.name} 完成拉投资，募集到 ${ord.expectedFundWan || 0} 万。`);
+            emp.experienceMonths += 3;
+            emp.leadership = Math.min(10, (emp.leadership || 0) + 1);
+          } else {
+            appendLog(state, `【拉投·失败】${emp.name} 的拉投资未达成目标，声誉 -1。`);
+            state.reputation = Math.max(0, (state.reputation || 0) - 1);
+          }
+          const idx2 = state.activeBusinesses.findIndex((b) => b.id === ord.id);
+          if (idx2 >= 0) state.activeBusinesses.splice(idx2, 1);
+        }
+      } catch (e) {
+        console.error('fundraising settle error', e);
+      }
+      continue;
+    }
+
     const allocForSettle =
       ord.profitPolicy === 'remit' ? ord.initialWan : roundWan(ord.aumWan);
     if (allocForSettle <= 0) continue;
@@ -506,10 +595,11 @@ export function runSettlement(state, config) {
 
     const cMacro = ord.kind === 'stock' ? state.actualEquityC : state.actualCommodityC;
 
-    const { P, profitWan, success } = settleMonthlyOrder({
+    const abilityForBusiness = computeBusinessAbility(emp, ord.kind);
+    let { P, profitWan, success } = settleMonthlyOrder({
       kind: ord.kind,
       cMacro,
-      ability: emp.ability,
+      ability: abilityForBusiness,
       allocWan: allocForSettle,
       monthIndex,
       orderIndexInMonth: ord.rngOrderSlot,
@@ -523,6 +613,19 @@ export function runSettlement(state, config) {
       leverage: ord.leverage,
       stockSleeveWeightBp: ord.kind === 'stock' ? (ord.stockSleeveBp ?? 10000) : undefined,
     });
+
+    // 管理上限超额惩罚：如果当前 AUM 超过员工管理上限，收益减半
+    const maxAumWan = getEmployeeMaxAumWan(emp);
+    let exceededLimit = false;
+    if (ord.aumWan > maxAumWan) {
+      exceededLimit = true;
+      if (profitWan > 0) {
+        profitWan = roundWan(profitWan * 0.5);
+        // 重新计算 P（基于新的 profitWan）
+        P = allocForSettle > 1e-9 ? Math.round((profitWan / allocForSettle) * 10000) : P;
+        success = profitWan > 0;
+      }
+    }
 
     const postVal = roundWan(allocForSettle + profitWan);
     const polLabel = ord.profitPolicy === 'reinvest' ? '滚存复利' : '上交公司';
@@ -554,18 +657,21 @@ export function runSettlement(state, config) {
       continue;
     }
 
+    // 超额惩罚标记
+    const exceededMark = exceededLimit ? '[超限收益减半] ' : '';
+
     if (ord.profitPolicy === 'reinvest') {
       ord.aumWan = postVal;
       appendLog(
         state,
-        `【月结·复利】${emp.name} ${ord.kind === 'stock' ? '股票' : '期货'} P=${(P / 100).toFixed(2)}% 净利 ${profitWan} 万 → AUM ${ord.aumWan} 万。`,
+        `【月结·复利】${emp.name} ${ord.kind === 'stock' ? '股票' : '期货'} ${exceededMark}P=${(P / 100).toFixed(2)}% 净利 ${profitWan} 万 → AUM ${ord.aumWan} 万。`,
       );
     } else {
       state.companyCashWan = roundWan(state.companyCashWan + profitWan);
       ord.aumWan = roundWan(ord.initialWan);
       appendLog(
         state,
-        `【月结·上交】${emp.name} ${ord.kind === 'stock' ? '股票' : '期货'} P=${(P / 100).toFixed(2)}% 净利 ${profitWan} 万 → 划入公司；业务本金维持 ${ord.initialWan} 万。`,
+        `【月结·上交】${emp.name} ${ord.kind === 'stock' ? '股票' : '期货'} ${exceededMark}P=${(P / 100).toFixed(2)}% 净利 ${profitWan} 万 → 划入公司；业务本金维持 ${ord.initialWan} 万。`,
       );
     }
 
@@ -626,6 +732,7 @@ export function closeMonthAndAdvance(state) {
     rentTotalWan: rentTotal,
     companyCashStartWan: cashStart,
     companyCashEndWan: cashEnd,
+    activeBusinessesSnapshot: JSON.parse(JSON.stringify(state.activeBusinesses || [])),
   });
   state.showMonthReport = true;
 
@@ -701,23 +808,51 @@ export function resolveMargin(state, businessId, action, extraPayWan) {
   return { ok: true };
 }
 
-export function runTrain(state, employeeId) {
+/**
+ * 培训接口（支持两种类型）
+ * @param {object} state
+ * @param {string} employeeId
+ * @param {'general'|'industry'} type
+ * @param {string} targetKey - 对于 general: 'leadership'|'innovation'|'execution'；对于 industry: industry id
+ */
+export function runTrain(state, employeeId, type = 'general', targetKey = 'leadership') {
   if (state.trainedThisMonth) return { ok: false, error: '本月培训名额已用' };
   const emp = state.employees.find((e) => e.id === employeeId);
   if (!emp) return { ok: false, error: '员工不存在' };
-  if (emp.ability >= 10) return { ok: false, error: '能力已满' };
   if (hasActiveBusiness(state, emp.id)) return { ok: false, error: '该员工负责在营业务，不能培训' };
 
-  const nextAb = emp.ability + 1;
-  const cost = trainingCostWan(nextAb);
-  if (state.companyCashWan + 1e-9 < cost) return { ok: false, error: '现金不足' };
+  if (type === 'general') {
+    // 通用能力：单次 +1，费用 1 万（或可按目标值计算）
+    const dim = targetKey;
+    if (!['leadership', 'innovation', 'execution'].includes(dim)) return { ok: false, error: '无效的通用能力维度' };
+    if ((emp[dim] || 0) >= 10) return { ok: false, error: `${dim} 已达上限` };
+    const cost = 1; // 1 万元提高 1 点
+    if (state.companyCashWan + 1e-9 < cost) return { ok: false, error: '现金不足' };
+    state.companyCashWan = roundWan(state.companyCashWan - cost);
+    emp[dim] = Math.min(10, (emp[dim] || 0) + 1);
+    state.trainedThisMonth = true;
+    state.trainedEmployeeId = emp.id;
+    appendLog(state, `【培训】${emp.name} 的 ${dim} 提升至 ${emp[dim]}，花费 ${cost} 万。`);
+    return { ok: true };
+  }
 
-  state.companyCashWan = roundWan(state.companyCashWan - cost);
-  emp.ability = nextAb;
-  state.trainedThisMonth = true;
-  state.trainedEmployeeId = emp.id;
-  appendLog(state, `【培训】${emp.name} 能力提升至 ${emp.ability}，花费 ${cost} 万。`);
-  return { ok: true };
+  if (type === 'industry') {
+    // 行业技术培训：单次 +5，费用 0.2 万/点 -> 5 点 = 1 万
+    const ind = targetKey;
+    if (!ind || !emp.industryTech) return { ok: false, error: '无效的行业' };
+    if (typeof emp.industryTech[ind] !== 'number') return { ok: false, error: '该员工无该行业技术字段' };
+    const delta = 5;
+    const cost = roundWan(delta * 0.2);
+    if (state.companyCashWan + 1e-9 < cost) return { ok: false, error: '现金不足' };
+    state.companyCashWan = roundWan(state.companyCashWan - cost);
+    emp.industryTech[ind] = Math.min(100, (emp.industryTech[ind] || 0) + delta);
+    state.trainedThisMonth = true;
+    state.trainedEmployeeId = emp.id;
+    appendLog(state, `【培训】${emp.name} 的 ${ind} 行业技术提升 ${delta} 点 → ${emp.industryTech[ind]}，花费 ${cost} 万。`);
+    return { ok: true };
+  }
+
+  return { ok: false, error: '未知培训类型' };
 }
 
 export function runPromote(state, employeeId) {

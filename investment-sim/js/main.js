@@ -15,9 +15,9 @@ import {
   OFFICE_GRADES,
   B_STOCK_BP_BY_C,
   B_FUT_BP_BY_C,
-  getEmployeeMaxAumWan,
+  INDUSTRIES,
+  PHASE_UNLOCKS,
 } from './core/tables.js';
-import { AI_STYLES } from './core/employeeAI.js';
 import { runRefreshTalentPool, runHireFromTalent, TALENT_REFRESH_COST_WAN } from './core/talentPool.js';
 import {
   runMonthOpening,
@@ -47,8 +47,10 @@ let config = null;
 let state = null;
 let currentView = 'market'; // 当前C区域显示的视图
 let selectedBusinessId = null; // 当前选中的业务ID（用于业务详情视图）
+let selectedNewBusinessKind = null; // 新开业务：临时选择的磁贴（tile-first UI）
+/** 人事：null=磁贴选择；recruit | train | employees */
+let selectedHrSubView = null;
 
-// #region agent log - embedded config
 // 内嵌的默认配置数据（当无法从服务器加载 JSON 时使用）
 const EMBEDDED_CONFIG = {
   "schemaVersion": 1,
@@ -98,7 +100,27 @@ const EMBEDDED_CONFIG = {
     }
   }
 };
-// #endregion
+
+// 业务显示映射（用于 UI 文本）
+const BUSINESS_DISPLAY = {
+  stock: '📈 股票',
+  fut: '📊 期货',
+  consulting: '💼 咨询服务',
+  fundraising: '🤝 拉投资',
+  realestate: '🏠 房地产',
+  startup_invest: '🚀 初创投资',
+  ma_local: '🔗 并购',
+  rnd: '🧪 研发',
+  business_group: '🏢 业务组',
+  overseas: '🌍 海外投资',
+  ma_global: '🌐 跨国并购',
+  ipo: '🏦 IPO',
+};
+
+// 阶段中文标签
+const PHASE_LABELS = { startup: '初创期', expansion: '扩张期', mature: '成熟期' };
+
+const TIER_LABELS = { junior: '初级', mid: '中级', senior: '高级' };
 
 // 情绪标签渲染（带样式类）
 function sentimentLine(c, withClass = false) {
@@ -196,6 +218,18 @@ function renderMonthReportModal(data) {
           <thead><tr><th>员工</th><th>类型</th><th>月收益率</th><th>交易净利(万)</th><th>月分红(万)</th><th>结果</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
+        <h3 class="section-title" style="font-size:0.95rem;margin-top:0.75rem;">长期/筹资进度</h3>
+        ${Array.isArray(data.fundraisingRows) && data.fundraisingRows.length ? `
+          <table class="data-table" style="margin-top:0.25rem;"><thead><tr><th>员工</th><th>进度</th><th>目标募集(万)</th></tr></thead>
+          <tbody>
+            ${data.fundraisingRows
+              .map((r) => {
+                const emp = state.employees.find((e) => e.id === r.employeeId) || {};
+                return `<tr><td>${escapeHtml(emp.name || r.employeeName || '—')}</td><td>${r.elapsedMonths}/${r.totalMonths} 月</td><td>${formatMoney(r.expectedFundWan || 0)}</td></tr>`;
+              })
+              .join('')}
+          </tbody></table>
+        ` : '<p class="hint">本月无进行中的筹资项目。</p>'}
         <button type="button" class="primary" data-action="dismiss-month-report">关闭并继续经营</button>
       </div>
     </div>`;
@@ -209,6 +243,40 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
+function renderCompanyPhaseModal(modal) {
+  const from = modal.from || '—';
+  const to = modal.to || '—';
+  const unlocked = modal.unlocked || {};
+  const biz = (unlocked.businesses || [])
+    .map((b) => `<li>${escapeHtml(BUSINESS_DISPLAY[b] || b)}</li>`)
+    .join('') || '<li>无</li>';
+  const tiers = (unlocked.employeeTiers || [])
+    .map((t) => `<li>${escapeHtml(TIER_LABELS[t] || t)}</li>`)
+    .join('') || '<li>无</li>';
+  const offices = (unlocked.officeTypes || [])
+    .map((o) => `<li>${escapeHtml(OFFICE_GRADES[o]?.name || o)}</li>`)
+    .join('') || '<li>无</li>';
+  const trigger = escapeHtml(modal.triggeredBy || '满足触发条件');
+  const toLabel = PHASE_LABELS[to] || to;
+  return `
+    <div class="month-report-overlay" id="company-phase-overlay" role="dialog" aria-modal="true">
+      <div class="month-report-card">
+        <h2 class="section-title">🎉 公司进入 ${escapeHtml(toLabel)}！</h2>
+        <p>恭喜，您的公司已满足触发条件：<strong>${trigger}</strong></p>
+        <h3 class="section-title" style="font-size:0.95rem;">解锁内容</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.5rem;">
+          <div><h4>新业务</h4><ul>${biz}</ul></div>
+          <div><h4>新员工层级</h4><ul>${tiers}</ul></div>
+          <div><h4>新写字楼类型</h4><ul>${offices}</ul></div>
+        </div>
+        <div style="margin-top:0.75rem;">
+          <button type="button" class="primary" data-action="dismiss-company-phase">我知道了</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function portfolioSummary(b) {
   if (b.kind !== 'stock' || !b.stockPortfolio?.length) return '—';
   return b.stockPortfolio
@@ -216,6 +284,26 @@ function portfolioSummary(b) {
       const st = config.stocks.find((s) => s.id === p.stockId);
       const name = st?.shortName || p.stockId;
       return `${name} ${(p.weightBp / 100).toFixed(1)}%`;
+    })
+    .join(' · ');
+}
+
+function formatAbilities(e) {
+  const l = e.leadership != null ? e.leadership : e.ability || 0;
+  const i = e.innovation != null ? e.innovation : e.ability || 0;
+  const x = e.execution != null ? e.execution : e.ability || 0;
+  const avg = ((Number(l) + Number(i) + Number(x)) / 3).toFixed(1);
+  return `${l}/${i}/${x} (${avg})`;
+}
+
+/** 行业熟练度：与 INDUSTRIES 顺序一致，图标+数值 */
+function formatIndustryTech(emp) {
+  const tech = emp?.industryTech || {};
+  return Object.keys(INDUSTRIES)
+    .map((key) => {
+      const info = INDUSTRIES[key];
+      const val = tech[key] != null ? tech[key] : 0;
+      return `${info.icon || ''}${val}`;
     })
     .join(' · ');
 }
@@ -401,8 +489,7 @@ function renderBusinessDetailView() {
 
   const emp = state.employees.find((e) => e.id === b.employeeId);
   const pol = b.profitPolicy === 'reinvest' ? '复利' : '上交';
-  const typeName = b.kind === 'stock' ? '股票' : '期货';
-  const aiLine = emp?.aiStyle ? (AI_STYLES[emp.aiStyle]?.name || emp.aiStyle) : '—';
+  const typeName = b.kind === 'stock' ? '股票' : b.kind === 'fut' ? '期货' : b.kind === 'consulting' ? '咨询' : '拉投资';
 
   const sleeveBp = b.stockSleeveBp != null && b.stockSleeveBp >= 0 ? b.stockSleeveBp : 10000;
 
@@ -429,7 +516,7 @@ function renderBusinessDetailView() {
         <h2 class="section-title" style="margin:0;">${emp?.name || '未知'} · ${typeName}业务详情</h2>
       </div>
 
-      <div class="overview-stats" style="grid-template-columns:repeat(5,1fr);">
+      <div class="overview-stats" style="grid-template-columns:repeat(4,1fr);">
         <div class="stat-box">
           <div class="label">AUM</div>
           <div class="value">${formatMoney(b.aumWan)}</div>
@@ -446,15 +533,13 @@ function renderBusinessDetailView() {
           <div class="label">${b.kind === 'stock' ? '指导风格' : '杠杆'}</div>
           <div class="value">${b.kind === 'stock' ? STOCK_GUIDE_LABELS[b.stockGuideMode ?? 1] : b.leverage + 'x'}</div>
         </div>
-        <div class="stat-box">
-          <div class="label">员工AI</div>
-          <div class="value" style="font-size:0.85rem;">${aiLine}</div>
-        </div>
       </div>
 
       <div class="panel">
-        <h3 class="section-title">组合/配置</h3>
-        <p>${portfolioHtml}</p>
+          <h3 class="section-title">组合/配置</h3>
+          <p>${portfolioHtml}</p>
+          ${b.kind === 'consulting' ? `<p>行业：${INDUSTRIES?.[b.industry]?.icon || ''} ${INDUSTRIES?.[b.industry]?.name || b.industry}</p>` : ''}
+          ${b.kind === 'fundraising' ? `<p>进度：${b.elapsedMonths || 0}/${b.totalMonths || 0} 月 · 目标募集 ${formatMoney(b.expectedFundWan || 0)}</p>` : ''}
       </div>
 
       <div class="panel">
@@ -477,28 +562,50 @@ function renderNewBusinessView() {
   const idle = state.employees.filter((e) => employeeCanDeploy(state, e));
   const variants = Object.keys(config?.futures?.variants || {});
 
+  // Tile-first: 若未选中业务种类，展示磁贴选择
+  if (!selectedNewBusinessKind) {
+    // 根据当前公司阶段动态渲染可选业务磁贴
+    const unlockedKinds = (PHASE_UNLOCKS[state.companyPhase?.current || 'startup']?.businesses) || ['stock', 'fut', 'consulting', 'fundraising'];
+    const tilesHtml = unlockedKinds
+      .map((k) => `<button type="button" class="biz-tile ${k==='stock'||k==='fut' ? 'primary' : ''}" data-action="select-newbiz" data-kind="${k}">${BUSINESS_DISPLAY[k] || k}</button>`)
+      .join('');
+    return `
+      <div class="view-section">
+        <h2 class="section-title">新开业务</h2>
+        <p class="hint">先选择业务类型，然后填写指派信息。</p>
+        <div class="panel" style="display:flex;flex-direction:column;gap:0.75rem;">
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">${tilesHtml}</div>
+          <div class="hint">选择后可在表单中指派员工与填写参数，或点击返回重新选择。</div>
+        </div>
+      </div>`;
+  }
+
+  // 已选中某种业务，显示指派表单（类型预选）
+  const selKind = selectedNewBusinessKind;
+  // 可用业务选项（表单下拉）
+  const unlockedFormKinds = (PHASE_UNLOCKS[state.companyPhase?.current || 'startup']?.businesses) || ['stock','fut','consulting','fundraising'];
+  const selectOptionsHtml = unlockedFormKinds.map((k) => `<option value="${k}" ${selKind===k ? 'selected' : ''}>${BUSINESS_DISPLAY[k] || k}</option>`).join('');
   return `
     <div class="view-section">
-      <h2 class="section-title">新开业务</h2>
-      <p class="hint">股票：有 AI 且能生成有效组合时按风格满仓；否则（无 AI、或无可买股、或 AI 选不出）用本金的 20% 随机买 1～4 支。期货：自选品种与杠杆。调拨上限：初/中/高员工各 ${getEmployeeMaxAumWan({ tier: 'junior' })}/${getEmployeeMaxAumWan({ tier: 'mid' })}/${getEmployeeMaxAumWan({ tier: 'senior' })} 万，且股票≤100万、期货≤50万（取低）。</p>
-
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+        <button type="button" class="small" data-action="clear-newbiz">← 选择其他业务</button>
+        <h2 class="section-title">新开：${selKind === 'stock' ? '股票' : selKind === 'fut' ? '期货' : selKind === 'consulting' ? '咨询' : '拉投资'}</h2>
+      </div>
       <div class="panel">
         <div class="flex-row" style="gap:0.75rem; flex-wrap:wrap;">
           <label>员工<select id="dep-emp">${idle.map((e) => {
-            const st = e.aiStyle ? AI_STYLES[e.aiStyle]?.name || e.aiStyle : '—';
-            return `<option value="${e.id}">${e.name} 能${e.ability} · 管限${getEmployeeMaxAumWan(e)}万 · ${st}</option>`;
+            return `<option value="${e.id}">${e.name} ${formatAbilities(e)}</option>`;
           }).join('')}</select></label>
-          <label>类型<select id="dep-kind"><option value="stock">股票</option><option value="fut">期货</option></select></label>
-          <label>本金(万)<input type="number" id="dep-alloc" class="narrow" value="20" min="1" /></label>
-          <label>利润分配<select id="dep-policy"><option value="reinvest">滚存复利</option><option value="remit">上交公司</option></select></label>
+          <label>类型<select id="dep-kind">${selectOptionsHtml}</select></label>
+          <label id="dep-alloc-wrap">本金(万)<input type="number" id="dep-alloc" class="narrow" value="20" min="1" /></label>
+          <label id="dep-policy-wrap">利润分配<select id="dep-policy"><option value="reinvest">滚存复利</option><option value="remit">上交公司</option></select></label>
         </div>
         <div id="dep-fut-wrap" class="hidden" style="margin-top:0.5rem;">
           <label>品种 <select id="dep-futvar">${variants.map((v) => `<option value="${v}">${config.futures.variants[v].displayName}</option>`).join('')}</select></label>
           <label>杠杆 <select id="dep-lev"><option value="1">1x</option><option value="2">2x</option><option value="3">3x</option></select></label>
         </div>
-        <div id="dep-stock-wrap" style="margin-top:0.5rem;">
-          <span class="hint">股票默认指导风格（开业）</span>
-          <select id="dep-mode"><option value="0">${STOCK_GUIDE_LABELS[0]}</option><option value="1" selected>${STOCK_GUIDE_LABELS[1]}</option><option value="2">${STOCK_GUIDE_LABELS[2]}</option></select>
+        <div id="dep-consult-wrap" class="hidden" style="margin-top:0.5rem;">
+          <label>行业 <select id="dep-industry">${Object.keys(INDUSTRIES).map((k) => `<option value="${k}">${INDUSTRIES[k].icon || ''} ${INDUSTRIES[k].name}</option>`).join('')}</select></label>
         </div>
         <div style="margin-top:0.6rem;">
           <button type="button" class="primary" data-action="add-order" ${idle.length ? '' : 'disabled'}>开业</button>
@@ -520,10 +627,9 @@ function renderGuideView() {
   return `<div class="view-section">${renderGuidePanel()}</div>`;
 }
 
-// 6. 人事招聘视图
+// 6. 人事视图（磁贴优先，与「新开业务」一致）
 function renderHrView() {
   const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
-  const officeOpts = ['standard', 'business', 'hq'].filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear);
   const prom = state.employees.filter((e) => canPromote(e));
   const trainCandidates = state.employees.filter((e) => {
     if (state.trainedThisMonth) return false;
@@ -531,9 +637,151 @@ function renderHrView() {
     return !hasActiveBusiness(state, e.id);
   });
 
-  // 可开除的员工（没有在营业务的）
-  const fireableEmployees = state.employees.filter((e) => !hasActiveBusiness(state, e.id));
+  if (!selectedHrSubView) {
+    return `
+      <div class="view-section">
+        <h2 class="section-title">人事</h2>
+        <p class="hint">选择人事模块。写字楼租赁与购买请在「公司情况」中操作。</p>
+        <div class="panel" style="display:flex;flex-direction:column;gap:0.75rem;">
+          <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+            <button type="button" class="biz-tile primary" data-action="select-hr-subview" data-subview="recruit">招聘与人才库</button>
+            <button type="button" class="biz-tile primary" data-action="select-hr-subview" data-subview="train">培训与晋升</button>
+            <button type="button" class="biz-tile" data-action="select-hr-subview" data-subview="employees">员工信息</button>
+          </div>
+          <div class="hint">进入子页面后可返回重新选择模块。</div>
+        </div>
+      </div>`;
+  }
 
+  const subTitle =
+    selectedHrSubView === 'recruit'
+      ? '招聘与人才库'
+      : selectedHrSubView === 'train'
+        ? '培训与晋升'
+        : selectedHrSubView === 'employees'
+          ? '员工信息'
+          : '人事';
+
+  if (selectedHrSubView === 'recruit') {
+    return `
+      <div class="view-section">
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+          <button type="button" class="small" data-action="clear-hr-subview">← 返回人事首页</button>
+          <h2 class="section-title" style="margin:0;">${subTitle}</h2>
+        </div>
+        <div class="panel">
+          <h3 class="section-title">人才库（0.2）</h3>
+          <p class="hint">支付 <strong>${TALENT_REFRESH_COST_WAN} 万</strong> 刷新 3～5 名候选人；招聘费按其职级（初/中/高 5/8/15 万）。每人带 AI 交易风格。</p>
+          <div class="flex-row" style="margin-bottom:0.75rem; gap:0.75rem; flex-wrap:wrap; align-items:flex-end;">
+            <button type="button" data-action="refresh-talent-pool">刷新人才（-${TALENT_REFRESH_COST_WAN}万）</button>
+          </div>
+          <div class="talent-card-grid">
+            ${(state.talentPool || [])
+              .map(
+                (t) => `
+              <div class="talent-card">
+                <div class="talent-card-name">${escapeHtml(t.name)}</div>
+                <div class="talent-card-meta">${tierLabels[t.tier] || t.tier}</div>
+                <div class="talent-card-meta">能力 ${t.ability} · 忠诚 ${t.loyalty}</div>
+                <div class="talent-card-meta">招聘 ${recruitCostForTier(t.tier)} 万</div>
+                <button type="button" class="primary small" data-action="hire-talent" data-tid="${escapeHtml(t.id)}">招聘此人</button>
+              </div>`,
+              )
+              .join('') || '<p class="hint">当前人才库为空，请先刷新。</p>'}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (selectedHrSubView === 'train') {
+    return `
+      <div class="view-section">
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+          <button type="button" class="small" data-action="clear-hr-subview">← 返回人事首页</button>
+          <h2 class="section-title" style="margin:0;">${subTitle}</h2>
+        </div>
+        <div class="panel">
+          <h3 class="section-title">培训（1人次/月）</h3>
+          <div class="flex-row" style="gap:1rem;align-items:center;flex-wrap:wrap;">
+            <select id="hr-train">${state.employees
+              .map((e) => {
+                const ok = trainCandidates.some((x) => x.id === e.id);
+                return `<option value="${e.id}" ${ok ? '' : 'disabled'}>${e.name} ${formatAbilities(e)}</option>`;
+              })
+              .join('')}</select>
+            <select id="hr-train-type"><option value="general">提升通用能力（+1）</option><option value="industry">提升行业技术（+5）</option></select>
+            <select id="hr-train-dim">
+              <option value="leadership">领导力</option>
+              <option value="innovation">创新力</option>
+              <option value="execution">执行力</option>
+            </select>
+            <select id="hr-train-industry" class="hidden">
+              ${Object.keys(INDUSTRIES).map((k) => `<option value="${k}">${INDUSTRIES[k].icon} ${INDUSTRIES[k].name}</option>`).join('')}
+            </select>
+            <button type="button" data-action="train">培训</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 class="section-title">晋升</h3>
+          <div class="flex-row" style="gap:1rem;flex-wrap:wrap;">
+            <select id="hr-prom">${state.employees
+              .map((e) => {
+                const ok = prom.some((x) => x.id === e.id);
+                return `<option value="${e.id}" ${ok ? '' : 'disabled'}>${e.name}</option>`;
+              })
+              .join('')}</select>
+            <button type="button" data-action="promote">晋升</button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (selectedHrSubView === 'employees') {
+    return `
+      <div class="view-section">
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+          <button type="button" class="small" data-action="clear-hr-subview">← 返回人事首页</button>
+          <h2 class="section-title" style="margin:0;">${subTitle}</h2>
+        </div>
+        <div class="panel">
+          <h3 class="section-title">员工管理</h3>
+          <table class="data-table">
+            <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>行业熟练度</th><th>忠诚</th><th>工龄</th><th>操作</th></tr></thead>
+            <tbody>
+              ${state.employees.map((e) => {
+                const tl = { junior: '初级', mid: '中级', senior: '高级' };
+                const hasBiz = hasActiveBusiness(state, e.id);
+                return `<tr>
+                  <td>
+                    <input type="text" class="small" value="${escapeHtml(e.name)}" data-action="rename-emp" data-eid="${e.id}" style="width:80px;padding:2px 4px;font-size:0.75rem;" />
+                  </td>
+                  <td>${tl[e.tier] || e.tier}</td>
+                  <td>${formatAbilities(e)}</td>
+                  <td style="font-size:0.68rem;line-height:1.35;color:#e9c891;max-width:14rem;">${escapeHtml(formatIndustryTech(e))}</td>
+                  <td>${e.loyalty}</td>
+                  <td>${e.experienceMonths}月</td>
+                  <td>
+                    ${!hasBiz
+                      ? `<button type="button" class="small danger" data-action="fire-emp" data-eid="${e.id}">开除</button>`
+                      : '<span class="hint">负责业务中</span>'}
+                  </td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+          <p class="hint">编辑姓名后失焦或按回车保存。行业熟练度顺序与培训中的行业一致。</p>
+        </div>
+      </div>`;
+  }
+
+  selectedHrSubView = null;
+  return renderHrView();
+}
+
+// 7. 公司情况视图
+function renderCompanyView() {
+  const cap = getTotalCapacity(state);
+  const officeOpts = ['standard', 'business', 'hq'].filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear);
   const leaseRows = state.offices
     .map((o, i) => {
       const g = OFFICE_GRADES[o.gradeId];
@@ -547,121 +795,6 @@ function renderHrView() {
       }</td></tr>`;
     })
     .join('');
-
-  return `
-    <div class="view-section">
-      <h2 class="section-title">人事与写字楼</h2>
-
-      <div class="panel">
-        <h3 class="section-title">人才库（0.2）</h3>
-        <p class="hint">支付 <strong>${TALENT_REFRESH_COST_WAN} 万</strong> 刷新 3～5 名候选人；招聘费按其职级（初/中/高 5/8/15 万）。每人带 AI 交易风格。</p>
-        <div class="flex-row" style="margin-bottom:0.75rem; gap:0.75rem; flex-wrap:wrap; align-items:flex-end;">
-          <button type="button" data-action="refresh-talent-pool">刷新人才（-${TALENT_REFRESH_COST_WAN}万）</button>
-        </div>
-        <div class="talent-card-grid">
-          ${(state.talentPool || [])
-            .map(
-              (t) => `
-            <div class="talent-card">
-              <div class="talent-card-name">${escapeHtml(t.name)}</div>
-              <div class="talent-card-meta">${tierLabels[t.tier] || t.tier} · ${AI_STYLES[t.aiStyle]?.name || t.aiStyle}</div>
-              <div class="talent-card-meta">能力 ${t.ability} · 忠诚 ${t.loyalty}</div>
-              <div class="talent-card-meta">招聘 ${recruitCostForTier(t.tier)} 万</div>
-              <button type="button" class="primary small" data-action="hire-talent" data-tid="${escapeHtml(t.id)}">招聘此人</button>
-            </div>`,
-            )
-            .join('') || '<p class="hint">当前人才库为空，请先刷新。</p>'}
-        </div>
-      </div>
-
-      <div class="panel">
-        <h3 class="section-title">培训（1人次/月）</h3>
-        <div class="flex-row" style="gap:1rem;">
-          <select id="hr-train">${state.employees
-            .map((e) => {
-              const ok = trainCandidates.some((x) => x.id === e.id);
-              return `<option value="${e.id}" ${ok ? '' : 'disabled'}>${e.name} 能${e.ability}</option>`;
-            })
-            .join('')}</select>
-          <button type="button" data-action="train">培训</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h3 class="section-title">晋升</h3>
-        <div class="flex-row" style="gap:1rem;">
-          <select id="hr-prom">${state.employees
-            .map((e) => {
-              const ok = prom.some((x) => x.id === e.id);
-              return `<option value="${e.id}" ${ok ? '' : 'disabled'}>${e.name}</option>`;
-            })
-            .join('')}</select>
-          <button type="button" data-action="promote">晋升</button>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h3 class="section-title">员工管理</h3>
-        <table class="data-table">
-          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>忠诚</th><th>AI风格</th><th>管限(万)</th><th>工龄</th><th>操作</th></tr></thead>
-          <tbody>
-            ${state.employees.map((e) => {
-              const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
-              const hasBiz = hasActiveBusiness(state, e.id);
-              const ai = e.aiStyle ? AI_STYLES[e.aiStyle]?.name || e.aiStyle : '—';
-              return `<tr>
-                <td>
-                  <input type="text" class="small" value="${e.name}" data-action="rename-emp" data-eid="${e.id}" style="width:80px;padding:2px 4px;font-size:0.75rem;" />
-                </td>
-                <td>${tierLabels[e.tier] || e.tier}</td>
-                <td>${e.ability}</td>
-                <td>${e.loyalty}</td>
-                <td style="font-size:0.75rem;">${ai}</td>
-                <td>${getEmployeeMaxAumWan(e)}</td>
-                <td>${e.experienceMonths}月</td>
-                <td>
-                  ${!hasBiz
-                    ? `<button type="button" class="small danger" data-action="fire-emp" data-eid="${e.id}">开除</button>`
-                    : '<span class="hint">负责业务中</span>'}
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-        <p class="hint">点击员工姓名可直接编辑修改</p>
-      </div>
-
-      <div class="panel">
-        <h3 class="section-title">写字楼</h3>
-        <table class="data-table"><thead><tr><th>#</th><th>写字楼</th><th>类型</th><th>容量</th><th>费用</th><th></th></tr></thead>
-        <tbody>${leaseRows}</tbody></table>
-        <div class="flex-row" style="margin-top:0.5rem;">
-          <select id="hr-lease-grade">${officeOpts
-            .map((gid) => {
-              const g = OFFICE_GRADES[gid];
-              return `<option value="${gid}">租 ${g.name} +${g.capacity}人 / ${g.monthlyRentWan}万</option>`;
-            })
-            .join('')}</select>
-          <button type="button" data-action="lease">租赁</button>
-          ${
-            state.year >= 2010
-              ? `<select id="hr-buy-grade">${['standard', 'business', 'hq']
-                  .filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear)
-                  .map((gid) => {
-                    const g = OFFICE_GRADES[gid];
-                    return `<option value="${gid}">购 ${g.name} ${g.purchasePriceWan}万</option>`;
-                  })
-                  .join('')}</select><button type="button" data-action="buy-office">购买</button>`
-              : '<span class="hint">2010年后可购楼</span>'
-          }
-        </div>
-      </div>
-    </div>`;
-}
-
-// 7. 公司情况视图
-function renderCompanyView() {
-  const cap = getTotalCapacity(state);
 
   return `
     <div class="view-section">
@@ -689,34 +822,43 @@ function renderCompanyView() {
       <div class="panel">
         <h3 class="section-title">员工列表</h3>
         <table class="data-table">
-          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>忠诚</th><th>AI</th><th>管限(万)</th><th>工龄(月)</th></tr></thead>
+          <thead><tr><th>姓名</th><th>等级</th><th>能力</th><th>行业熟练度</th><th>忠诚</th><th>工龄(月)</th></tr></thead>
           <tbody>
             ${state.employees.map((e) => {
               const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
-              const ai = e.aiStyle ? AI_STYLES[e.aiStyle]?.name || e.aiStyle : '—';
-              return `<tr><td>${e.name}</td><td>${tierLabels[e.tier] || e.tier}</td><td>${e.ability}</td><td>${e.loyalty}</td><td>${ai}</td><td>${getEmployeeMaxAumWan(e)}</td><td>${e.experienceMonths}</td></tr>`;
+              return `<tr><td>${escapeHtml(e.name)}</td><td>${tierLabels[e.tier] || e.tier}</td><td>${formatAbilities(e)}</td><td style="font-size:0.68rem;line-height:1.35;color:#e9c891;">${escapeHtml(formatIndustryTech(e))}</td><td>${e.loyalty}</td><td>${e.experienceMonths}</td></tr>`;
             }).join('')}
           </tbody>
         </table>
       </div>
 
       <div class="panel">
-        <h3 class="section-title">写字楼资产</h3>
+        <h3 class="section-title">写字楼</h3>
+        <p class="hint">租赁、购买、退租与出售均在此办理（原在「人事」中的写字楼逻辑已移至此处）。</p>
         <table class="data-table">
-          <thead><tr><th>#</th><th>类型</th><th>容量</th><th>费用</th><th>操作</th></tr></thead>
-          <tbody>
-            ${state.offices.map((o, i) => {
-              const g = OFFICE_GRADES[o.gradeId];
-              const tag = o.kind === 'owned' ? '自有' : '租赁';
-              const fee = o.kind === 'lease' ? `${g.monthlyRentWan}万/月` : `${o.purchasePriceWan}万购入`;
-              return `<tr><td>${i}</td><td>${g.name}</td><td>+${g.capacity}</td><td>${fee}</td><td>
-                ${o.kind === 'lease'
-                  ? `<button type="button" class="small danger" data-action="release-lease" data-idx="${i}">退租</button>`
-                  : `<button type="button" class="small danger" data-action="sell-owned" data-idx="${i}">出售</button>`}
-              </td></tr>`;
-            }).join('')}
-          </tbody>
+          <thead><tr><th>#</th><th>写字楼</th><th>类型</th><th>容量</th><th>费用</th><th>操作</th></tr></thead>
+          <tbody>${leaseRows}</tbody>
         </table>
+        <div class="flex-row" style="margin-top:0.5rem;flex-wrap:wrap;gap:0.5rem;">
+          <select id="hr-lease-grade">${officeOpts
+            .map((gid) => {
+              const g = OFFICE_GRADES[gid];
+              return `<option value="${gid}">租 ${g.name} +${g.capacity}人 / ${g.monthlyRentWan}万</option>`;
+            })
+            .join('')}</select>
+          <button type="button" data-action="lease">租赁</button>
+          ${
+            state.year >= 2010
+              ? `<select id="hr-buy-grade">${['standard', 'business', 'hq']
+                  .filter((gid) => state.year >= OFFICE_GRADES[gid].unlockYear)
+                  .map((gid) => {
+                    const g = OFFICE_GRADES[gid];
+                    return `<option value="${gid}">购 ${g.name} ${g.purchasePriceWan}万</option>`;
+                  })
+                  .join('')}</select><button type="button" data-action="buy-office">购买</button>`
+              : '<span class="hint">2010年后可购楼</span>'
+          }
+        </div>
       </div>
 
       <div class="panel">
@@ -763,9 +905,10 @@ function renderSidebar() {
   bizList.innerHTML = state.activeBusinesses.map((b) => {
     const emp = state.employees.find((e) => e.id === b.employeeId);
     const isActive = currentView === 'business-detail' && selectedBusinessId === b.id;
+    const kindLabel = { stock: '股票', fut: '期货', consulting: '咨询', fundraising: '拉投资' }[b.kind] || b.kind;
     return `
       <div class="biz-thumb ${isActive ? 'active' : ''}" data-action="view-business-detail" data-bid="${b.id}">
-        <div class="biz-name">${emp?.name || '未知'} · ${b.kind === 'stock' ? '股票' : '期货'}</div>
+        <div class="biz-name">${emp?.name || '未知'} · ${kindLabel}</div>
         <div class="biz-meta">AUM: <span class="biz-aum">${formatMoney(b.aumWan)}</span></div>
       </div>
     `;
@@ -863,7 +1006,8 @@ function render() {
   // 渲染当前视图
   const renderer = viewRenderers[currentView] || renderMarketView;
   const reportModal = state.showMonthReport && state.monthReportData ? renderMonthReportModal(state.monthReportData) : '';
-  root.innerHTML = marginBlock + renderer() + reportModal;
+  const companyPhaseModal = state.pendingCompanyPhaseModal ? renderCompanyPhaseModal(state.pendingCompanyPhaseModal) : '';
+  root.innerHTML = marginBlock + renderer() + reportModal + companyPhaseModal;
 
   // 绑定事件
   bindActions(root);
@@ -871,6 +1015,8 @@ function render() {
   // 特定视图的后处理
   if (currentView === 'new-business') {
     wireKindToggle(root);
+  } else if (currentView === 'hr' && selectedHrSubView === 'train') {
+    wireTrainToggle(root);
   } else if (currentView === 'guide') {
     syncGuideBlocks(root);
     const gbiz = $('#guide-biz', root);
@@ -889,8 +1035,32 @@ function wireKindToggle(root) {
     const k = kind.value;
     $('#dep-fut-wrap', root)?.classList.toggle('hidden', k !== 'fut');
     $('#dep-stock-wrap', root)?.classList.toggle('hidden', k !== 'stock');
+    $('#dep-consult-wrap', root)?.classList.toggle('hidden', k !== 'consulting');
+    // 咨询与拉投资无需本金输入
+    $('#dep-alloc-wrap', root)?.classList.toggle('hidden', k === 'consulting' || k === 'fundraising');
+    // 利润分配仅在 股票/期货 显示
+    $('#dep-policy-wrap', root)?.classList.toggle('hidden', k !== 'stock' && k !== 'fut');
   };
   kind.addEventListener('change', sync);
+  sync();
+}
+
+function wireTrainToggle(root) {
+  const typeSel = $('#hr-train-type', root);
+  const dim = $('#hr-train-dim', root);
+  const ind = $('#hr-train-industry', root);
+  if (!typeSel) return;
+  const sync = () => {
+    const t = typeSel.value;
+    if (t === 'general') {
+      dim?.classList.remove('hidden');
+      ind?.classList.add('hidden');
+    } else {
+      dim?.classList.add('hidden');
+      ind?.classList.remove('hidden');
+    }
+  };
+  typeSel.addEventListener('change', sync);
   sync();
 }
 
@@ -960,6 +1130,7 @@ function bindSidebarActions(sidebar) {
     btn.addEventListener('click', (e) => {
       const view = e.currentTarget.dataset.view;
       if (view && view !== currentView) {
+        if (currentView === 'hr' && view !== 'hr') selectedHrSubView = null;
         currentView = view;
         selectedBusinessId = null; // 切换主视图时清除选中
         render();
@@ -972,6 +1143,7 @@ function bindSidebarActions(sidebar) {
     el.addEventListener('click', (e) => {
       const bid = e.currentTarget.dataset.bid;
       if (bid) {
+        if (currentView === 'hr') selectedHrSubView = null;
         selectedBusinessId = bid;
         currentView = 'business-detail';
         render();
@@ -1012,6 +1184,8 @@ function onAction(ev) {
     state = createInitialState(seed);
     currentView = 'market';
     selectedBusinessId = null;
+    selectedNewBusinessKind = null;
+    selectedHrSubView = null;
     runMonthOpening(state);
     saveToLocal(state);
     render();
@@ -1022,6 +1196,7 @@ function onAction(ev) {
   if (action === 'switch-view') {
     const view = ev.currentTarget.dataset.view;
     if (view && view !== currentView) {
+      if (currentView === 'hr' && view !== 'hr') selectedHrSubView = null;
       currentView = view;
       selectedBusinessId = null;
       render();
@@ -1029,14 +1204,39 @@ function onAction(ev) {
     return;
   }
 
+  if (action === 'select-hr-subview') {
+    selectedHrSubView = ev.currentTarget.dataset.subview || null;
+    render();
+    return;
+  }
+  if (action === 'clear-hr-subview') {
+    selectedHrSubView = null;
+    render();
+    return;
+  }
+
   // 查看业务详情（从业务卡片或缩略图）
   if (action === 'view-business-detail') {
     const bid = ev.currentTarget.dataset.bid;
     if (bid) {
+      if (currentView === 'hr') selectedHrSubView = null;
       selectedBusinessId = bid;
       currentView = 'business-detail';
       render();
     }
+    return;
+  }
+
+  // Tile-first: 选择新开业务磁贴
+  if (action === 'select-newbiz') {
+    selectedNewBusinessKind = ev.currentTarget.dataset.kind || null;
+    render();
+    return;
+  }
+
+  if (action === 'clear-newbiz') {
+    selectedNewBusinessKind = null;
+    render();
     return;
   }
 
@@ -1058,6 +1258,15 @@ function onAction(ev) {
       leverage: Number($('#dep-lev')?.value ?? 1),
       futuresVariantId: $('#dep-futvar')?.value || 'composite',
     };
+    if (kind === 'consulting') {
+      draft.industry = $('#dep-industry')?.value || Object.keys(INDUSTRIES)[0];
+      // consulting 不使用 alloc
+      delete draft.allocWan;
+    }
+    if (kind === 'fundraising') {
+      // fundraising 无需 alloc，后端根据员工领导力设置周期与目标
+      delete draft.allocWan;
+    }
     const res = addActiveBusiness(state, draft, config);
     if (!res.ok) alert(res.error);
     saveToLocal(state);
@@ -1134,6 +1343,13 @@ function onAction(ev) {
     render();
     return;
   }
+  if (action === 'dismiss-company-phase') {
+    // 关闭强制阶段晋升弹窗
+    state.pendingCompanyPhaseModal = null;
+    saveToLocal(state);
+    render();
+    return;
+  }
   if (action === 'refresh-talent-pool') {
     const r = runRefreshTalentPool(state);
     if (!r.ok) alert(r.error);
@@ -1150,7 +1366,12 @@ function onAction(ev) {
     return;
   }
   if (action === 'train') {
-    const r = runTrain(state, $('#hr-train')?.value);
+    const empId = $('#hr-train')?.value;
+    const type = $('#hr-train-type')?.value || 'general';
+    const dim = $('#hr-train-dim')?.value;
+    const ind = $('#hr-train-industry')?.value;
+    const target = type === 'general' ? dim : ind;
+    const r = runTrain(state, empId, type, target);
     if (!r.ok) alert(r.error);
     saveToLocal(state);
     render();
@@ -1273,10 +1494,6 @@ function onAction(ev) {
 }
 
 async function bootstrap() {
-  // #region agent log - bootstrap start
-  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:start',message:'bootstrap started',data:{origin:window.location.origin,pathname:window.location.pathname,href:window.location.href},timestamp:Date.now(),runId:'debug1',hypothesisId:'H1-path'})}).catch(()=>{});
-  // #endregion
-
   const origin = window.location.origin;
   const pathBase = window.location.pathname.replace(/\/investment-sim\/?.*$/, '') || '';
   // 添加时间戳参数防止缓存
@@ -1288,42 +1505,19 @@ async function bootstrap() {
     `./stocks-futures.json${cacheBuster}`,
   ];
 
-  // #region agent log - urls computed
-  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:urls',message:'computed tryUrls',data:{origin,pathBase,tryUrls},timestamp:Date.now(),runId:'debug1',hypothesisId:'H1-path'})}).catch(()=>{});
-  // #endregion
-
   let raw = null;
   let lastError = null;
   for (const u of tryUrls) {
     try {
-      // #region agent log - fetch attempt
-      fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:fetch',message:'fetch attempt',data:{url:u},timestamp:Date.now(),runId:'debug1',hypothesisId:'H3-404'})}).catch(()=>{});
-      // #endregion
-
       const res = await fetch(u, { cache: 'no-store' });
-
-      // #region agent log - fetch response
-      fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:response',message:'fetch response',data:{url:u,ok:res.ok,status:res.status,statusText:res.statusText},timestamp:Date.now(),runId:'debug1',hypothesisId:'H3-404'})}).catch(()=>{});
-      // #endregion
-
       if (res.ok) {
         raw = await res.json();
-        // #region agent log - success
-        fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:success',message:'fetch success',data:{url:u,hasStocks:!!raw?.stocks,hasFutures:!!raw?.futures},timestamp:Date.now(),runId:'debug1',hypothesisId:'H3-404'})}).catch(()=>{});
-        // #endregion
         break;
       }
     } catch (e) {
-      // #region agent log - fetch error
-      fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:error',message:'fetch error',data:{url:u,error:e?.message||String(e),errorType:e?.name},timestamp:Date.now(),runId:'debug1',hypothesisId:'H2-cors'})}).catch(()=>{});
-      // #endregion
       lastError = e;
     }
   }
-
-  // #region agent log - final result
-  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'156325'},body:JSON.stringify({sessionId:'156325',location:'main.js:bootstrap:result',message:'bootstrap result',data:{rawIsNull:raw===null,lastError:lastError?.message||null},timestamp:Date.now(),runId:'debug1',hypothesisId:'H4-error'})}).catch(()=>{});
-  // #endregion
 
   // 如果 fetch 失败，使用内嵌配置作为备用
   if (!raw) {

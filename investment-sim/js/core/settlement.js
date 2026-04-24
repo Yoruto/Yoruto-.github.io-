@@ -155,3 +155,21 @@ export function settleMonthlyOrder(input) {
   const success = profitWan > 0;
   return { P, profitWan, success };
 }
+
+/**
+ * 计算咨询服务（市场分析报告）收益，单位：万
+ * 公式（基于设计文档）：
+ * 基础 30k，领导力每点 +3k，行业技术每点 +0.1k。上限 230k。
+ * 将千元单位转换为万元：除以 10。
+ */
+export function calculateConsultingRevenue(employee, industry) {
+  const techLevel = (employee.industryTech && employee.industryTech[industry]) || 0;
+  const baseThousand = 30; // 30k
+  const leadershipThousand = (employee.leadership || 0) * 3; // per point 3k
+  const techThousand = techLevel * 0.1; // per point 0.1k
+  let totalThousand = baseThousand + leadershipThousand + techThousand;
+  if (totalThousand > 230) totalThousand = 230;
+  // 转换为万元并四舍五入到 0.0001 万
+  const totalWan = roundWan(totalThousand / 10);
+  return totalWan;
+}

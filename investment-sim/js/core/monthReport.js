@@ -23,6 +23,7 @@ export function buildMonthReportData({
   settlementResults,
   dividendTotalWan,
   dividendBreakdown,
+  activeBusinessesSnapshot,
   payrollTotalWan,
   rentTotalWan,
   companyCashStartWan,
@@ -70,6 +71,17 @@ export function buildMonthReportData({
       employeeName: d.employeeName,
       amountWan: roundWan(d.amountWan || 0),
     })),
+    fundraisingRows:
+      (activeBusinessesSnapshot || [])
+        .filter((b) => b && b.kind === 'fundraising')
+        .map((b) => ({
+          businessId: b.id,
+          employeeId: b.employeeId,
+          employeeName: null, // caller may fill if needed
+          elapsedMonths: b.elapsedMonths || 0,
+          totalMonths: b.totalMonths || 0,
+          expectedFundWan: roundWan(b.expectedFundWan || 0),
+        })),
     dividendTotalWan: roundWan(dividendTotalWan || 0),
     tradingProfitWan: roundWan(tradingProfit),
     payrollTotalWan: roundWan(payrollTotalWan || 0),

@@ -93,11 +93,30 @@ export function runHireFromTalent(state, talentId) {
   }
 
   state.companyCashWan = roundWan(state.companyCashWan - cost);
+  // 迁移/生成 v0.3 员工结构（将旧 ability 拆分为三维并初始化行业技术）
+  const baseAbility = t.ability || 5;
+  const leadership = Math.max(1, Math.min(10, Math.floor(baseAbility / 3) + 2));
+  const innovation = Math.max(1, Math.min(10, Math.floor(baseAbility / 3) + 1));
+  const execution = Math.max(1, Math.min(10, Math.floor(baseAbility / 3) + 1));
+  const industryTech = {
+    finance: Math.floor(Math.random() * 10) + 5,
+    realestate: Math.floor(Math.random() * 10) + 5,
+    tech: Math.floor(Math.random() * 10) + 5,
+    semiconductor: Math.floor(Math.random() * 10) + 5,
+    consumer: Math.floor(Math.random() * 10) + 5,
+    medical: Math.floor(Math.random() * 10) + 5,
+    energy: Math.floor(Math.random() * 10) + 5,
+    aerospace: Math.floor(Math.random() * 10) + 5,
+  };
   const emp = {
     id: nextId(state, 'e'),
     name: t.name,
     tier: t.tier,
     ability: t.ability,
+    leadership,
+    innovation,
+    execution,
+    industryTech,
     loyalty: t.loyalty,
     experienceMonths: 0,
     hiredYearMonth: { year: state.year, month: state.month },
