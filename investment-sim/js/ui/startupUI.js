@@ -1,9 +1,18 @@
 import { generateBPs, loadStartupConfig, startStartupInvestment } from '../core/startupInvest.js';
+import { INDUSTRIES } from '../core/tables.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
 function escapeHtml(s) {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function getIndustryDisplay(industryId) {
+  const info = INDUSTRIES?.[industryId];
+  if (info) {
+    return `${info.icon || ''} ${info.name || industryId}`;
+  }
+  return industryId || '—';
 }
 
 /**
@@ -13,15 +22,16 @@ function escapeHtml(s) {
  */
 export function buildStartupNewBusinessHtml({ bps, idleEmployees, embedInForm }) {
   if (!bps?.length) {
-    return '<p class="hint">暂无 BP（请确认已加载 startup-invest 与 startup-projects 配置）。</p>';
+    return '<p class="hint">暂无商业计划（请确认已加载初创投资配置）。</p>';
   }
   const cards = bps
     .map((b, idx) => {
       const pct = b.valuationWan > 0 ? ((b.raiseWan / b.valuationWan) * 100).toFixed(1) : '—';
+      const industryDisplay = getIndustryDisplay(b.industry);
       return `
       <div class="bp-card-sim" style="background:#2a1f1a;border:1px solid #5e4b34;border-radius:0.75rem;padding:0.75rem;flex:1;min-width:240px;max-width:100%;">
         <div style="font-size:0.9rem;">🚀 <strong style="color:#ffeaac;">在研 / ${escapeHtml(b.name)}</strong></div>
-        <div style="font-size:0.78rem;color:#ac9e7e;margin:0.35rem 0;">行业 <strong>${escapeHtml(b.industry)}</strong> · 轮次 <strong>${escapeHtml(String(b.round))}</strong></div>
+        <div style="font-size:0.78rem;color:#ac9e7e;margin:0.35rem 0;">行业 <strong>${escapeHtml(industryDisplay)}</strong> · 轮次 <strong>${escapeHtml(String(b.round))}</strong></div>
         <div style="font-size:0.8rem;">估值 <strong>${b.valuationWan}</strong> 万 · 拟融资 <strong>${b.raiseWan}</strong> 万 · 约出让 ${pct}%</div>
         <div style="margin-top:0.5rem;">
           <button type="button" class="primary small" data-action="add-startup-invest" data-bp-idx="${idx}" ${idleEmployees.length ? '' : 'disabled'}>直接投资</button>
@@ -31,7 +41,7 @@ export function buildStartupNewBusinessHtml({ bps, idleEmployees, embedInForm })
     .join('');
 
   const topHint = embedInForm
-    ? `<p class="hint">请在上方选择<strong>员工</strong>，再点下方 BP 的「直接投资」。尽调费 2%，每 6 个月命运判定（晋级/收购/IPO/破产等）。</p>`
+    ? `<p class="hint">请在上方选择<strong>员工</strong>，再点下方项目的「直接投资」。尽调费 2%，每 6 个月命运判定（晋级/收购/IPO/破产等）。</p>`
     : `<p class="hint">扩张期解锁：尽调费 2%，资金一次性划出；每 6 个月进行一轮命运判定（晋级/收购/IPO/破产等）。</p>
       <div class="flex-row" style="margin-bottom:0.75rem;align-items:center;gap:0.75rem;">
         <label>指派员工
@@ -60,8 +70,8 @@ export function initStartupUI(getState, saveAndRender) {
     <h3 style="margin:0 0 0.5rem 0;">初创投资</h3>
     <div id="bp-list" style="max-height:240px;overflow:auto;border:1px solid #333;padding:0.5rem;background:#0b1620;color:#dfe8ef;"></div>
     <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;">
-      <button id="refresh-bps" class="small">刷新 BP 列表</button>
-      <button id="open-bp-modal" class="small">生成并展开</button>
+      <button id="refresh-bps" class="small">刷新项目列表</button>
+      <button id="open-bp-modal" class="small">生成并展开项目</button>
     </div>
     <div id="bp-detail" style="margin-top:0.5rem;display:none;border-top:1px dashed #334;padding-top:0.5rem;"></div>
   `;
@@ -98,7 +108,7 @@ export function initStartupUI(getState, saveAndRender) {
       const bps = await generateBPs(6, (new Date()).getFullYear(), Math.floor(Math.random()*10000));
       listEl.innerHTML = bps
         .map((b) => `<div class="bp-item" data-id="${b.id}" style="padding:0.35rem;border-bottom:1px solid #223;">
-            <div style="display:flex;justify-content:space-between;align-items:center;"><div><strong>${escapeHtml(b.name)}</strong> <span style="color:#9fb3c6">(${escapeHtml(b.industry)})</span></div><div><button class="bp-view small">查看</button></div></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;"><div><strong>${escapeHtml(b.name)}</strong> <span style="color:#9fb3c6">(${escapeHtml(getIndustryDisplay(b.industry))})</span></div><div><button class="bp-view small">查看</button></div></div>
             <div style="font-size:0.85rem;color:#9fb3c6;">轮次: ${escapeHtml(String(b.round))} · 估值 ${b.valuationWan} 万 · 募资 ${b.raiseWan} 万</div>
           </div>`)
         .join('');
@@ -126,7 +136,7 @@ export function initStartupUI(getState, saveAndRender) {
     const employees = state.employees || [];
 
     det.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;"><div><strong>${escapeHtml(b.name)}</strong> · ${escapeHtml(b.industry)}</div><div><button id="close-detail" class="small">关闭</button></div></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;"><div><strong>${escapeHtml(b.name)}</strong> · ${escapeHtml(getIndustryDisplay(b.industry))}</div><div><button id="close-detail" class="small">关闭</button></div></div>
       <div style="margin-top:0.5rem;color:#9fb3c6;">估值 ${b.valuationWan} 万 · 募资 ${b.raiseWan} 万 · 建议轮次 ${escapeHtml(String(b.round))}</div>
       <div style="margin-top:0.5rem;border-top:1px solid #152; padding-top:0.5rem;">
         <label style="display:block;margin-bottom:0.25rem;">员工：</label>

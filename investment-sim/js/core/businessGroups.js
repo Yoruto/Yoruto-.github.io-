@@ -107,7 +107,10 @@ export class BusinessGroupsManager {
    * 点击「扩展业务」按钮
    * - 消耗资金，直接提升 marketShare
    */
-  expandMarket(group) {
+  /**
+   * @param {object} [state] 若存在且含 state.market，则累积扩张点并由市场系统从「其他」转化份额
+   */
+  expandMarket(group, state = null) {
     const cost = this.config.expandCostPerClick;
     if ((group.fundingWan || 0) < cost) {
       return { ok: false, error: `业务组资金不足，需要 ${cost} 万` };
@@ -116,6 +119,11 @@ export class BusinessGroupsManager {
       return { ok: false, error: '市场占有率已达上限' };
     }
     group.fundingWan = (group.fundingWan || 0) - cost;
+    if (state && state.market) {
+      const per10 = cost / 10;
+      group.expandPoints = (group.expandPoints || 0) + per10;
+      return { ok: true, cost, expandPoints: group.expandPoints };
+    }
     const gain = this.config.expandShareGain;
     group.metrics.marketShare = Math.min(1, (group.metrics.marketShare || 0) + gain);
     return { ok: true, cost, gain };
@@ -141,15 +149,15 @@ export class BusinessGroupsManager {
    * 月度 tick：自动推进在研产品进度、扣除工资、更新收入与估值
    * 不再自动扣除 rdWan/expandWan/patentWan（改为按钮即时操作）
    */
-  tickMonth(state = null){
+  tickMonth(state = null) {
     const dissolvedGroups = [];
     const remainingGroups = [];
+    const useMarket = state && state.market;
 
-    for(const group of this.groups){
-      // 检查人员是否为0，如果是则准备裁撤
-      if(!(group.teamIds||[]).length){
-        dissolvedGroups.push({...group});
-        if(state && state.companyCashWan !== undefined){
+    for (const group of this.groups) {
+      if (!(group.teamIds || []).length) {
+        dissolvedGroups.push({ ...group });
+        if (state && state.companyCashWan !== undefined) {
           state.companyCashWan = (state.companyCashWan || 0) + (group.fundingWan || 0);
         }
         continue;
@@ -158,59 +166,76 @@ export class BusinessGroupsManager {
       const emps = this.getEmployeesForGroup(group);
       const teamSize = emps.length;
 
-      // 1. 扣除员工工资（业务组内部发放）
-      const salaryCost = teamSize * this.config.employeeSalaryWan;
-      group.fundingWan = Math.max(0, (group.fundingWan || 0) - salaryCost);
-
-      // 2. 自动推进在研产品进度（每月20%）
       const autoProgress = this.config.productAutoProgressPerMonth;
-      for (const prod of (group.products || [])) {
+      for (const prod of group.products || []) {
         if (!prod.completed) {
           prod.progress = Math.min(1, (prod.progress || 0) + autoProgress);
           if (prod.progress >= 1) {
             prod.completed = true;
             prod.progress = 1;
-            // 产品完成，提升 productLevel
             group.metrics.productLevel = (group.metrics.productLevel || 0) + 1;
+            // 产品完成判定：失败(33%)/正常(33%)/大成功(33%)
+            const roll = Math.random();
+            if (roll < 0.33) {
+              // 失败：标记为失败品，不获得市占
+              prod.outcome = 'failure';
+              prod.outcomeLabel = '失败品';
+            } else if (roll < 0.67) {
+              // 正常：获得 0.5%~2% 市占
+              prod.outcome = 'normal';
+              prod.outcomeLabel = '成功';
+              const shareGain = 0.005 + Math.random() * 0.015; // 0.5% ~ 2%
+              group.metrics.marketShare = Math.min(1, (group.metrics.marketShare || 0) + shareGain);
+              prod.marketShareGained = shareGain;
+            } else {
+              // 大成功：获得 5%~10% 市占
+              prod.outcome = 'great_success';
+              prod.outcomeLabel = '大成功';
+              const shareGain = 0.05 + Math.random() * 0.05; // 5% ~ 10%
+              group.metrics.marketShare = Math.min(1, (group.metrics.marketShare || 0) + shareGain);
+              prod.marketShareGained = shareGain;
+            }
           }
         }
       }
 
-      // 3. 计算收入（基于 productLevel 和 marketShare）
-      const productMultiplier = 1 + (group.metrics.productLevel || 0) * 0.05 + (group.metrics.patentValueWan || 0) / Math.max(1, this.config.marketSizeWan);
-      const monthlyRevenueWan = this.config.marketSizeWan * (group.metrics.marketShare || 0) * productMultiplier;
-      group.metrics.monthlyRevenueWan = Math.round(monthlyRevenueWan);
-
-      // 4. 更新 TTM 收入
-      group.metrics.ttmRevenueWan = (group.metrics.ttmRevenueWan || 0) * 11/12 + monthlyRevenueWan / 12;
-
-      // 5. 收入入账（业务组资金增加）
-      group.fundingWan = (group.fundingWan || 0) + monthlyRevenueWan;
-
-      // 6. 更新估值
-      group.metrics.valuationWan = Math.round(this.config.revenueMultiplier * group.metrics.ttmRevenueWan + (group.metrics.patentValueWan || 0));
-
-      // 7. 盈亏与连续盈利计数
-      const net = monthlyRevenueWan - salaryCost;
-      if (net > 0) {
-        group.consecutiveProfitMonths = (group.consecutiveProfitMonths || 0) + 1;
+      if (!useMarket) {
+        const salaryCost = teamSize * this.config.employeeSalaryWan;
+        group.fundingWan = Math.max(0, (group.fundingWan || 0) - salaryCost);
+        const productMultiplier =
+          1 +
+          (group.metrics.productLevel || 0) * 0.05 +
+          (group.metrics.patentValueWan || 0) / Math.max(1, this.config.marketSizeWan);
+        const monthlyRevenueWan = this.config.marketSizeWan * (group.metrics.marketShare || 0) * productMultiplier;
+        group.metrics.monthlyRevenueWan = Math.round(monthlyRevenueWan);
+        group.metrics.ttmRevenueWan = ((group.metrics.ttmRevenueWan || 0) * 11) / 12 + monthlyRevenueWan / 12;
+        group.fundingWan = (group.fundingWan || 0) + monthlyRevenueWan;
+        group.metrics.valuationWan = Math.round(
+          this.config.revenueMultiplier * group.metrics.ttmRevenueWan + (group.metrics.patentValueWan || 0),
+        );
+        const net = monthlyRevenueWan - salaryCost;
+        if (net > 0) group.consecutiveProfitMonths = (group.consecutiveProfitMonths || 0) + 1;
+        else group.consecutiveProfitMonths = 0;
       } else {
-        group.consecutiveProfitMonths = 0;
+        const netM = group.netProfitWan;
+        if (typeof netM === 'number' && netM > 0) {
+          group.consecutiveProfitMonths = (group.consecutiveProfitMonths || 0) + 1;
+        } else {
+          group.consecutiveProfitMonths = 0;
+        }
       }
 
-      // 8. 资金耗尽判定
       if ((group.fundingWan || 0) <= 0) {
         group.stage = 'failed';
       }
 
-      // 9. 状态迁移
-      if (group.stage === 'formation' && (group.initialFundingWan || 0) >= 1000 && (group.teamIds||[]).length >= 1){
+      if (group.stage === 'formation' && (group.initialFundingWan || 0) >= 1000 && (group.teamIds || []).length >= 1) {
         group.stage = 'incubation';
       }
-      if (group.stage === 'incubation' && (group.metrics.productLevel >= 2 && (group.metrics.marketShare || 0) >= 0.005)){
+      if (group.stage === 'incubation' && group.metrics.productLevel >= 2 && (group.metrics.marketShare || 0) >= 0.005) {
         group.stage = 'growth';
       }
-      if (group.stage === 'growth' && ((group.metrics.marketShare || 0) >= 0.05 || (group.metrics.valuationWan || 0) >= 50000)){
+      if (group.stage === 'growth' && ((group.metrics.marketShare || 0) >= 0.05 || (group.metrics.valuationWan || 0) >= 50000)) {
         group.stage = 'mature';
       }
 
@@ -269,6 +294,8 @@ export class BusinessGroupsManager {
       monthlyBurnWan: payload.monthlyBurnWan || this.config.employeeSalaryWan,
       monthlySpend: payload.monthlySpend || { rdWan: 0, expandWan: 0, patentWan: 0 },
       consecutiveProfitMonths: payload.consecutiveProfitMonths || 0,
+      expandPoints: payload.expandPoints || 0,
+      lastExpandConvertMonthIndex: payload.lastExpandConvertMonthIndex ?? null,
       createdAt: payload.createdAt || new Date().toISOString().slice(0,7)
     }, payload);
 

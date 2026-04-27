@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "industryIds": [
+    "finance", "realestate", "tech", "semiconductor", "consumer", "medical", "energy", "aerospace"
+  ],
+  "industries": {
+    "finance": {
+      "id": "finance",
+      "name": "金融",
+      "totalMarketSizeWan": 2000000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.04,
+      "variableCostRatio": 0.55,
+      "fixedCostWanMonthly": 80,
+      "initialNpcShares": { "npc-fin-1": 0.12, "npc-fin-2": 0.1 },
+      "otherShare": 0.78
+    },
+    "realestate": {
+      "id": "realestate",
+      "name": "地产",
+      "totalMarketSizeWan": 5000000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.03,
+      "variableCostRatio": 0.6,
+      "fixedCostWanMonthly": 120,
+      "initialNpcShares": { "npc-re-1": 0.15, "npc-re-2": 0.12 },
+      "otherShare": 0.73
+    },
+    "tech": {
+      "id": "tech",
+      "name": "科技/互联网",
+      "totalMarketSizeWan": 3000000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.08,
+      "variableCostRatio": 0.5,
+      "fixedCostWanMonthly": 100,
+      "initialNpcShares": { "npc-tech-1": 0.1, "npc-tech-2": 0.1 },
+      "otherShare": 0.8
+    },
+    "semiconductor": {
+      "id": "semiconductor",
+      "name": "半导体",
+      "totalMarketSizeWan": 1500000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.06,
+      "variableCostRatio": 0.58,
+      "fixedCostWanMonthly": 90,
+      "initialNpcShares": { "npc-semi-1": 0.11, "npc-semi-2": 0.09 },
+      "otherShare": 0.8
+    },
+    "consumer": {
+      "id": "consumer",
+      "name": "消费电子",
+      "totalMarketSizeWan": 1200000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.05,
+      "variableCostRatio": 0.57,
+      "fixedCostWanMonthly": 60,
+      "initialNpcShares": { "npc-cons-1": 0.1, "npc-cons-2": 0.1 },
+      "otherShare": 0.8
+    },
+    "medical": {
+      "id": "medical",
+      "name": "医疗",
+      "totalMarketSizeWan": 1000000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.045,
+      "variableCostRatio": 0.52,
+      "fixedCostWanMonthly": 70,
+      "initialNpcShares": { "npc-med-1": 0.1, "npc-med-2": 0.1 },
+      "otherShare": 0.8
+    },
+    "energy": {
+      "id": "energy",
+      "name": "能源",
+      "totalMarketSizeWan": 2500000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.035,
+      "variableCostRatio": 0.62,
+      "fixedCostWanMonthly": 100,
+      "initialNpcShares": { "npc-ene-1": 0.12, "npc-ene-2": 0.1 },
+      "otherShare": 0.78
+    },
+    "aerospace": {
+      "id": "aerospace",
+      "name": "航天/汽车",
+      "totalMarketSizeWan": 1800000,
+      "initialPlayerShare": 0,
+      "growthRateBaseYearly": 0.04,
+      "variableCostRatio": 0.59,
+      "fixedCostWanMonthly": 85,
+      "initialNpcShares": { "npc-aer-1": 0.1, "npc-aer-2": 0.1 },
+      "otherShare": 0.8
+    }
+  },
+  "realEstate": {
+    "nationalMarketWan": 20000000,
+    "regions": {
+      "bj": { "name": "北京", "shareOfNational": 0.2 },
+      "sh": { "name": "上海", "shareOfNational": 0.22 },
+      "sz": { "name": "深圳", "shareOfNational": 0.12 },
+      "other": { "name": "其他", "shareOfNational": 0.46 }
+    }
+  },
+  "globalParams": {
+    "maxNpcSharePerIndustry": 0.45,
+    "otherMinShare": 0.05,
+    "monthlyNpcVolatility": 0.04,
+    "maxNpcDeltaAbs": 0.03,
+    "playerNationalShareCap": 0.2,
+    "expandPointsPer10Wan": 1,
+    "expandConvertThresholdBase": 20
+  }
+}

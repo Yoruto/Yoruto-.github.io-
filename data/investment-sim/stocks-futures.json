@@ -3,30 +3,23 @@
   "gameId": "investment-company-v2",
   "description": "股票池（10 行业×2）与大宗期货品种基线表；B_fut / B_stock 万分比与《投资公司发展物语 V2.0 设计文档》附录 A 对齐。标的名称均为虚构。",
   "macroLines": [
-    {
-      "id": "equity_composite",
-      "displayName": "股市综合",
-      "appendixKey": "B_stock",
-      "note": "默认股票月结若未选 stockId，用此宏观。"
-    },
-    {
-      "id": "commodity_composite",
-      "displayName": "大宗综合",
-      "appendixKey": "B_fut / futures.variants.composite",
-      "note": "与行情「大宗商品」景气 c 对应。"
-    }
+    { "id": "equity_composite", "displayName": "股市综合", "appendixKey": "B_stock", "note": "默认股票月结用此线 c。" },
+    { "id": "commodity_composite", "displayName": "大宗商品", "appendixKey": "B_fut", "note": "大宗期货默认线。" },
+    { "id": "real_estate", "displayName": "房地产", "appendixKey": "real_estate_macro", "note": "地产叙事/租金修正。" },
+    { "id": "tech", "displayName": "科技/互联网", "appendixKey": "tech_macro", "note": "科技景气。" },
+    { "id": "overseas", "displayName": "海外市场", "appendixKey": "overseas_macro", "note": "外需与黄金等。" }
   ],
   "sectors": [
-    { "id": "fin", "name": "金融", "nameEn": "Financial", "sectorBetaBp": 500 },
-    { "id": "re", "name": "地产与基建", "nameEn": "Real Estate & Infra", "sectorBetaBp": 300 },
-    { "id": "cons", "name": "消费", "nameEn": "Consumer", "sectorBetaBp": 100 },
-    { "id": "tech", "name": "科技与通信", "nameEn": "Technology & Comms", "sectorBetaBp": 800 },
-    { "id": "health", "name": "医疗与生命", "nameEn": "Healthcare", "sectorBetaBp": 200 },
-    { "id": "ind", "name": "工业与制造", "nameEn": "Industrials", "sectorBetaBp": 400 },
-    { "id": "ene", "name": "能源与材料", "nameEn": "Energy & Materials", "sectorBetaBp": 600 },
-    { "id": "trans", "name": "交通运输", "nameEn": "Transportation", "sectorBetaBp": 250 },
-    { "id": "util", "name": "公用与环保", "nameEn": "Utilities & Environment", "sectorBetaBp": -500 },
-    { "id": "agri", "name": "农业与食品原料", "nameEn": "Agriculture", "sectorBetaBp": 50 }
+    { "id": "fin", "name": "金融", "nameEn": "Financial", "sectorBetaBp": 800, "macroSectorBetaBp": 60, "macroLineId": "equity_composite", "rateSensitivityBpPer1Pct": -150, "cycleBonusBpByPhase": { "recovery": 300, "boom": 600, "overheat": 200, "recession": -400, "depression": -800, "stagnation": 0 } },
+    { "id": "re", "name": "地产与基建", "nameEn": "Real Estate & Infra", "sectorBetaBp": 600, "macroSectorBetaBp": 100, "macroLineId": "real_estate", "rateSensitivityBpPer1Pct": -300, "cycleBonusBpByPhase": { "recovery": 200, "boom": 800, "overheat": 400, "recession": -600, "depression": -1200, "stagnation": 0 }, "lineSensitivityBp": { "real_estate": 300, "equity_composite": 60 } },
+    { "id": "cons", "name": "消费", "nameEn": "Consumer", "sectorBetaBp": 300, "macroSectorBetaBp": 40, "macroLineId": "equity_composite", "rateSensitivityBpPer1Pct": -100, "cycleBonusBpByPhase": { "recovery": 200, "boom": 400, "overheat": 100, "recession": -200, "depression": -400, "stagnation": 0 } },
+    { "id": "tech", "name": "科技与通信", "nameEn": "Technology & Comms", "sectorBetaBp": 2000, "macroSectorBetaBp": 200, "macroLineId": "tech", "rateSensitivityBpPer1Pct": -100, "cycleBonusBpByPhase": { "recovery": 600, "boom": 1000, "overheat": 400, "recession": -800, "depression": -1600, "stagnation": 0 }, "lineSensitivityBp": { "tech": 400, "equity_composite": 100 } },
+    { "id": "health", "name": "医疗与生命", "nameEn": "Healthcare", "sectorBetaBp": 500, "macroSectorBetaBp": 60, "macroLineId": "equity_composite", "rateSensitivityBpPer1Pct": -80, "cycleBonusBpByPhase": { "recovery": 200, "boom": 300, "overheat": 100, "recession": -100, "depression": -300, "stagnation": 0 } },
+    { "id": "ind", "name": "工业与制造", "nameEn": "Industrials", "sectorBetaBp": 800, "macroSectorBetaBp": 100, "macroLineId": "equity_composite", "rateSensitivityBpPer1Pct": -120, "cycleBonusBpByPhase": { "recovery": 300, "boom": 500, "overheat": 200, "recession": -400, "depression": -800, "stagnation": 0 } },
+    { "id": "ene", "name": "能源与材料", "nameEn": "Energy & Materials", "sectorBetaBp": 1200, "macroSectorBetaBp": 160, "macroLineId": "commodity_composite", "rateSensitivityBpPer1Pct": -100, "cycleBonusBpByPhase": { "recovery": 400, "boom": 700, "overheat": 800, "recession": -400, "depression": -1000, "stagnation": 0 }, "lineSensitivityBp": { "commodity_composite": 240, "overseas": 60 } },
+    { "id": "trans", "name": "交通运输", "nameEn": "Transportation", "sectorBetaBp": 500, "macroSectorBetaBp": 50, "macroLineId": "equity_composite", "rateSensitivityBpPer1Pct": -100, "cycleBonusBpByPhase": { "recovery": 200, "boom": 400, "overheat": 100, "recession": -300, "depression": -600, "stagnation": 0 } },
+    { "id": "util", "name": "公用与环保", "nameEn": "Utilities & Environment", "sectorBetaBp": -1200, "macroSectorBetaBp": -80, "macroLineId": "equity_composite", "rateSensitivityBpPer1Pct": -160, "cycleBonusBpByPhase": { "recovery": -100, "boom": -200, "overheat": -400, "recession": 100, "depression": 200, "stagnation": 0 }, "defensive": true },
+    { "id": "agri", "name": "农业与食品原料", "nameEn": "Agriculture", "sectorBetaBp": 150, "macroSectorBetaBp": 30, "macroLineId": "commodity_composite", "rateSensitivityBpPer1Pct": -60, "cycleBonusBpByPhase": { "recovery": 100, "boom": 200, "overheat": 100, "recession": -100, "depression": -200, "stagnation": 0 } }
   ],
   "stocks": [
     { "id": "STK0001", "name": "城信城市商业银行", "shortName": "城信", "sectorId": "fin", "listingYearMonth": "1992-05", "basePrice": 45.50, "matureYear": 1992, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true, "notes": "金融-成熟期：上市即成熟。成长期0年。" },
@@ -75,6 +68,22 @@
         "displayName": "农产品",
         "description": "农产口粮/油料等，与天气/小政策事件有叙事。",
         "B_fut_bp_by_c": [500, 250, 0, -250, -500]
+      },
+      "gold": {
+        "displayName": "黄金",
+        "description": "实际利率 r−π<0 时易获溢价。",
+        "B_fut_bp_by_c": [500, 250, 0, -250, -500],
+        "macroSensitivity": { "goldNegativeRealRateBp": 200 }
+      },
+      "silver": {
+        "displayName": "白银",
+        "description": "工业属性强，受大宗与科技线共同影响。",
+        "B_fut_bp_by_c": [650, 320, 0, -320, -650]
+      },
+      "copper": {
+        "displayName": "铜",
+        "description": "与地产新开工/工业相关。",
+        "B_fut_bp_by_c": [720, 360, 0, -360, -720]
       }
     }
   }

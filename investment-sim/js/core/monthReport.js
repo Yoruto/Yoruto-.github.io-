@@ -28,6 +28,8 @@ export function buildMonthReportData({
   rentTotalWan,
   companyCashStartWan,
   companyCashEndWan,
+  macroSnapshot,
+  marketSnapshot,
 }) {
   let tradingProfit = 0;
   if (settlementResults && settlementResults.length) {
@@ -92,5 +94,7 @@ export function buildMonthReportData({
     companyCashStartWan: roundWan(companyCashStartWan || 0),
     companyCashEndWan: roundWan(companyCashEndWan || 0),
     monthTotalWan: roundWan(tradingProfit + (dividendTotalWan || 0)),
+    macroSnapshot: macroSnapshot || null,
+    marketSnapshot: marketSnapshot || null,
   };
 }

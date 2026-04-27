@@ -3,7 +3,7 @@ import { randomEmployeeNameForSeed } from './rng.js';
 import { createDefaultCompanyEquity } from './companyEquity.js';
 
 /** 仅与当前开发构建一致；不兼容旧存档 */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** 万元精确到 0.0001（对应 1 元人民币） */
 export function roundWan(x) {
@@ -117,7 +117,6 @@ export function createInitialState(gameSeed) {
     /** 每条业务固定 RNG 槽位，保证可复现 */
     businessRngSlotSeq: 0,
     monthOrders: [],
-    guidanceRemaining: 1,
     actualEquityC: 2,
     actualCommodityC: 2,
     predictedEquityC: 2,
@@ -150,6 +149,9 @@ export function createInitialState(gameSeed) {
     pendingListingSuccessModal: null,
     pendingAnnualReport: null,
     pendingIssuanceSuccess: null,
+    /** v0.6 宏观经济与市场竞争（由 macro.js / marketCompetition.js 填充） */
+    macro: null,
+    market: null,
   };
 }
 

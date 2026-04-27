@@ -46,7 +46,7 @@ export function buildRealEstateNewBusinessHtml(opts) {
         <div style="font-weight:700;color:#ffeaac;margin-bottom:0.35rem;">${escapeHtml(p.name)}</div>
         <div style="font-size:0.78rem;color:#ac9e7e;">${escapeHtml(typeLabel(p.type))}</div>
         <div style="font-size:0.8rem;margin-top:0.4rem;">周期 <strong>${p.cycleMonths}</strong> 月 · 风险 <strong>${riskLabel(p.risk)}</strong></div>
-        <div style="font-size:0.8rem;">投资 <strong>${p.investWan}</strong> 万 · 预期 ROI ${roiPct}</div>
+        <div style="font-size:0.8rem;">投资 <strong>${p.investWan}</strong> 万 · 预期回报率 ${roiPct}</div>
         <div style="margin-top:0.5rem;">
           <button type="button" class="primary small" data-action="add-realestate" data-re-idx="${idx}" ${idleEmployees.length ? '' : 'disabled'}>开工</button>
         </div>

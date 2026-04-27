@@ -5,6 +5,7 @@
  */
 import { nextId, appendLog, roundWan } from './state.js';
 import { mixUint32, ymToMonthIndex } from './rng.js';
+import { getMacroConfigSync, getMacroLineIdByIndustry } from './macro.js';
 
 let _cfg = null;
 let _names = null;
@@ -180,11 +181,21 @@ export function processStartupMonthly(state, ord) {
   ord.elapsedMonths = 0;
   const mi = ymToMonthIndex(state.year, state.month);
   const h = mixUint32(state.gameSeed >>> 0, [mi, ord.rngOrderSlot || 0, ord.investedWan | 0]);
-  const r = (h % 10000) / 10000;
-  const pNext = roundCfg?.nextRoundProbability || 0.3;
-  const pAcq = roundCfg?.acquiredProbability || 0.05;
-  const pBank = roundCfg?.bankruptProbability || 0.15;
-  const pIpo = roundCfg?.ipoProbability || 0;
+  const r0 = (h % 10000) / 10000;
+  const pNext0 = roundCfg?.nextRoundProbability || 0.3;
+  const pAcq0 = roundCfg?.acquiredProbability || 0.05;
+  let pBank = roundCfg?.bankruptProbability || 0.15;
+  const pIpo0 = roundCfg?.ipoProbability || 0;
+  if (state.macro?.lines) {
+    const lineId = getMacroLineIdByIndustry(ord.industry || 'tech', getMacroConfigSync());
+    const cInd = state.macro.lines[lineId]?.c ?? 2;
+    pBank = Math.min(0.45, Math.max(0.04, pBank * (1.15 - 0.12 * cInd)));
+    if (state.macro.baseRate > 8) pBank = Math.min(0.5, pBank * 1.1);
+  }
+  const pNext = pNext0;
+  const pAcq = pAcq0;
+  const pIpo = pIpo0;
+  const r = r0;
   // normalize order: bankrupt, acquired, ipo, nextRound, survival fallback
   if (r < pBank) {
     appendLog(state, `【初创·破产】${ord.name} 在 ${ord.round} 阶段破产，投资归零。`);

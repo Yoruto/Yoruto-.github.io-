@@ -3,12 +3,12 @@
  * NOISE 为固定 256 项（单位：0.01 百分点）。
  */
 
-// 大环境因子: -5% 到 +5% (万分比: -500 到 500)
-// 对应情绪: 繁荣(🔥,+5%), 向好(📈,+2.5%), 平稳(➡️,0%), 低迷(📉,-2.5%), 冰点(💀,-5%)
-export const B_STOCK_BP_BY_C = [500, 250, 0, -250, -500];
+// 大环境因子: -15% 到 +15% (万分比: -1500 到 1500)
+// 对应情绪: 繁荣(🔥,+15%), 向好(📈,+6%), 平稳(➡️,0%), 低迷(📉,-6%), 冰点(💀,-15%)
+export const B_STOCK_BP_BY_C = [1500, 600, 0, -600, -1500];
 
-// 期货大环境因子同步调整: -6% 到 +6%
-export const B_FUT_BP_BY_C = [600, 300, 0, -300, -600];
+// 期货大环境因子同步调整: -18% 到 +18%
+export const B_FUT_BP_BY_C = [1800, 720, 0, -720, -1800];
 
 // 行情数值转可读的百分比
 export function formatReturnBp(bp) {
@@ -17,11 +17,6 @@ export function formatReturnBp(bp) {
 
 /** 能力 a=1..10 的加算（万分比）；索引 0 = 能力 1 */
 export const A_BP_BY_ABILITY = [-200, -150, -100, -50, 0, 50, 100, 150, 200, 250];
-
-/** 股票指导 mode: 0 保守 1 平衡 2 激进 — 期望加算（万分比） */
-export const G_STOCK_EXPECT_ADD_BP = [-200, 0, 400];
-
-export const STOCK_GUIDE_LABELS = ['保守', '平衡', '激进'];
 
 export const SENTIMENT_LABELS = ['繁荣', '向好', '平稳', '低迷', '冰点'];
 

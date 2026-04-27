@@ -8,7 +8,7 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <link rel="icon" href="data:," />
-  <title>投资公司发展物语 V2.0 — 0.5</title>
+  <title>投资公司发展物语 V2.0 — 0.6</title>
   <style>
     * { box-sizing: border-box; }
     body {
@@ -179,15 +179,6 @@
     }
     .log-panel .log-line { margin: 0.2rem 0; }
     .log-panel .log-key { color: #ac9e7e; margin-right: 0.35rem; }
-    .guide-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-      gap: 0.4rem;
-      max-height: 200px;
-      overflow-y: auto;
-      margin: 0.5rem 0;
-    }
-    .guide-grid label { font-size: 0.72rem; display: flex; flex-direction: column; gap: 2px; }
     .hidden { display: none !important; }
 
     /* ========== ABC区域布局 ========== */
@@ -471,7 +462,7 @@
 
   <!-- B+C区域容器 -->
   <div class="game-container">
-    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">0.5</span></h1>
+    <h1 class="game-title">投资公司发展物语 V2.0 <span style="font-size:0.75em;opacity:0.85">0.6</span></h1>
     <p class="game-sub">表驱动可复现结算 · 设计文档见仓库根目录</p>
 
     <div class="main-layout">
@@ -482,10 +473,11 @@
           <div class="nav-label">功能菜单</div>
           <nav class="function-nav" id="function-nav">
             <button type="button" data-view="market" class="active">市场行情</button>
+            <button type="button" data-view="macro">宏观经济</button>
+            <button type="button" data-view="competition">市场与竞争</button>
             <button type="button" data-view="business-list">在营业务</button>
             <button type="button" data-view="new-business">新开业务</button>
             <button type="button" data-view="business-groups">业务组</button>
-            <button type="button" data-view="guide">本月指导</button>
             <button type="button" data-view="hr">人事招聘</button>
             <button type="button" data-view="company">公司情况</button>
           </nav>
@@ -508,6 +500,6 @@
   </div>
 
   <!-- 修改任意 investment-sim/js 下文件后，请把 v= 加 1，强制浏览器拉取新模块（避免只缓存旧 main） -->
-  <script type="module" src="./js/main.js?v=0.5.5"></script>
+  <script type="module" src="./js/main.js?v=0.6.0"></script>
 </body>
 </html>

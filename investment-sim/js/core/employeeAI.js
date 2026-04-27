@@ -1,8 +1,8 @@
 /**
- * 员工 AI 选股：可复现；排名用“中性”能力(5) + 平衡指导 + 仅用于排序的 per-stock 确定性噪声。
+ * 员工 AI 选股：可复现；排名用"中性"能力(5) + 仅用于排序的 per-stock 确定性噪声。
  */
 import { mixUint32, rollMacroC, ymToMonthIndex } from './rng.js';
-import { B_STOCK_BP_BY_C, A_BP_BY_ABILITY, G_STOCK_EXPECT_ADD_BP, NOISE_BP } from './tables.js';
+import { B_STOCK_BP_BY_C, A_BP_BY_ABILITY, NOISE_BP } from './tables.js';
 
 export const AI_STYLES = {
   momentum: { id: 'momentum', name: '追涨杀跌' },
@@ -11,7 +11,6 @@ export const AI_STYLES = {
 };
 
 const ABILITY_NEUTRAL = 5;
-const GUIDE_BALANCE = 1;
 
 function stockIdTag(stockId) {
   let h = 0;
@@ -31,10 +30,9 @@ export function computeAiRankReturnBp(gameSeed, monthIndex, cMacro, stock, secto
   const sectorBp = sec?.sectorBetaBp ?? 0;
   const stockBp = stock?.betaExtraBp ?? 0;
   const aBp = A_BP_BY_ABILITY[ABILITY_NEUTRAL - 1];
-  const guideBp = G_STOCK_EXPECT_ADD_BP[GUIDE_BALANCE];
   const h = mixUint32(gameSeed >>> 0, [monthIndex, stockIdTag(stock.id), 0x41495354]);
   const noiseBp = NOISE_BP[h % 256];
-  return (macroBp + sectorBp + stockBp + aBp + guideBp + noiseBp) | 0;
+  return (macroBp + sectorBp + stockBp + aBp + noiseBp) | 0;
 }
 
 export function listingOk(listingYm, year, month) {

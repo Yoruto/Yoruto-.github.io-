@@ -9,16 +9,17 @@ import {
   recruitCostForTier,
   employeeCanDeploy,
   hasActiveBusiness,
+  appendLog,
 } from './core/state.js';
 import {
   SENTIMENT_LABELS,
   SENTIMENT_ICONS,
-  STOCK_GUIDE_LABELS,
   OFFICE_GRADES,
   B_STOCK_BP_BY_C,
   B_FUT_BP_BY_C,
   INDUSTRIES,
   PHASE_UNLOCKS,
+  NOISE_BP,
 } from './core/tables.js';
 import { runRefreshTalentPool, runHireFromTalent, TALENT_REFRESH_COST_WAN } from './core/talentPool.js';
 import {
@@ -27,7 +28,6 @@ import {
   confirmFundraisingWithEquity,
   closeActiveBusiness,
   setBusinessProfitPolicy,
-  applyGuidance,
   endTurn,
   resolveMargin,
   dismissMonthReport,
@@ -62,8 +62,33 @@ import { buildRealEstateNewBusinessHtml } from './ui/realEstateUI.js';
 import { loadRealEstateConfig, sampleProjectListSync, startRealEstateProject } from './core/realEstate.js';
 import { loadStartupConfig, generateBPsSync, startStartupInvestment } from './core/startupInvest.js';
 import BusinessGroupsManager from './core/businessGroups.js';
+import { loadMacroConfig, getMacroConfigSync } from './core/macro.js';
+import { loadMarketConfig } from './core/marketCompetition.js';
+import { getStockBetaExtraBp, computeCycleBonusBp, computeRateEffectBp, computeLineSensitivityBp } from './core/settlement.js';
+import { businessNoiseH, noiseBpFromH, mixUint32, ymToMonthIndex } from './core/rng.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
+
+function buildEndTurnConfig() {
+  return {
+    ...config,
+    businessGroups: bgManager?.groups,
+    afterMarketTick: () => {
+      if (!bgManager) return;
+      try {
+        const dissolvedGroups = state?.market ? bgManager.tickMonth(state) : bgManager.tickMonth();
+        if (dissolvedGroups && dissolvedGroups.length > 0) {
+          for (const g of dissolvedGroups) {
+            appendLog(state, `【业务组裁撤】${g.name} 人员为0，已自动裁撤，剩余资金 ${formatMoney(g.fundingWan || 0)} 返还母公司。`);
+          }
+          alert(`以下业务组因人员为0已被自动裁撤：\n${dissolvedGroups.map((g) => g.name).join('\n')}`);
+        }
+      } catch (e) {
+        console.warn('businessGroups tickMonth failed', e);
+      }
+    },
+  };
+}
 
 let config = null;
 let state = null;
@@ -191,139 +216,106 @@ function ensurePlayerStockInConfig() {
   }
 }
 
-// ===== Business Groups localStorage persistence helpers =====
-function loadBgFromLocalStorage() {
-  if (!bgManager) return false;
-  try {
-    const raw = localStorage.getItem('investment-sim:bg');
-    if (!raw) return false;
-    const obj = JSON.parse(raw);
-    if (obj.groups) bgManager.groups = obj.groups;
-    if (obj.employees) bgManager.employees = obj.employees;
-    // 合并此前生成的 IPO（避免重复 id）
-    if (obj.configStocks && Array.isArray(obj.configStocks)) {
-      config.stocks = config.stocks || [];
-      obj.configStocks.forEach((s) => {
-        if (!config.stocks.find((x) => x.id === s.id)) config.stocks.push(s);
-      });
-    }
-    return true;
-  } catch (e) {
-    console.warn('loadBgFromLocalStorage failed', e);
-    return false;
-  }
-}
-
-function saveBgToLocalStorage() {
-  if (!bgManager) return;
-  try {
-    const payload = {
-      groups: bgManager.groups || [],
-      employees: bgManager.employees || [],
-      configStocks: config?.stocks || [],
-      savedAt: Date.now(),
-    };
-    localStorage.setItem('investment-sim:bg', JSON.stringify(payload));
-  } catch (e) {
-    console.warn('saveBgToLocalStorage failed', e);
-  }
-}
-
-function clearBgLocalStorage() {
-  try {
-    localStorage.removeItem('investment-sim:bg');
-  } catch (e) {
-    console.warn('clearBgLocalStorage failed', e);
-  }
-}
-// ===== end persistence helpers =====
 
 /** 月度报告弹窗（已结束月份） */
 function renderMonthReportModal(data) {
   const y = data.closedYear;
   const m = data.closedMonth;
+
+  // 大事件显示
   const majorHtml =
     data.majorStack && data.majorStack.length
       ? `<ul style="margin:0.5rem 0;padding-left:1.2rem;">${data.majorStack
           .map(
             (e) =>
-              `<li><strong>${escapeHtml(e.title || e.id)}</strong>（剩余 ${e.monthsLeft != null ? e.monthsLeft : 0} 月）股市c=${e.equityC ?? '—'} 大宗c=${e.commodityC ?? '—'}</li>`,
+              `<li><strong>${escapeHtml(e.title || e.id)}</strong>（剩余 ${e.monthsLeft != null ? e.monthsLeft : 0} 月）</li>`,
           )
           .join('')}</ul>`
-      : '<p class="hint" style="margin:0.5rem 0;">当前无持续中的大事件叠加（或已结束）。</p>';
-  const hasDiv = (data.dividendTotalWan || 0) > 0;
-  const divHint = hasDiv
-    ? '<div style="font-size:0.75rem;color:#c9a227;margin-top:0.25rem;">年股息率按 12 个月均摊，每月按持仓计提一次（月分红）。</div>'
-    : '';
-  const rows =
-    (data.rows || [])
-      .map((r) => {
-        const kind = r.kind === 'fut' ? '期货' : '股票';
-        const ok = r.success ? '成功' : '未达正收益';
-        const dWan = r.dividendWan != null ? r.dividendWan : 0;
-        const divCell = r.kind === 'stock' ? formatMoney(dWan) : '—';
-        return `<tr><td>${escapeHtml(r.employeeName)}</td><td>${kind}</td><td>${(r.P / 100).toFixed(2)}%</td><td>${formatMoney(
-          r.profitWan
-        )}</td><td>${divCell}</td><td>${ok}</td></tr>`;
-      })
-      .join('') || '<tr><td colspan="6" class="hint">无在营业务结算</td></tr>';
+      : '<p class="hint" style="margin:0.5rem 0;">当前无持续中的大事件。</p>';
 
-  // 公司盈亏汇总
-  const incomeSection = `
-    <div style="background:#2a3d22;border:1px solid #5e4b34;border-radius:0.75rem;padding:0.75rem;margin:0.75rem 0;">
-      <h4 style="margin:0 0 0.5rem 0;color:#ffeaac;font-size:0.9rem;">公司盈亏汇总</h4>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;font-size:0.85rem;">
-        <div><span style="color:#ac9e7e;">月初现金：</span>${formatMoney(data.companyCashStartWan || 0)}</div>
-        <div><span style="color:#ac9e7e;">月末现金：</span>${formatMoney(data.companyCashEndWan || 0)}</div>
-        <div><span style="color:#7fff7f;">收入项：</span></div>
-        <div></div>
-        <div style="padding-left:1rem;">· 交易利润 ${formatMoney(data.tradingProfitWan || 0)}</div>
-        <div style="padding-left:1rem;">· 月分红收入 ${
-          hasDiv ? formatMoney(data.dividendTotalWan || 0) : formatMoney(0)
-        }${hasDiv ? '（年息÷12）' : ''}</div>
-        ${divHint}
-        <div style="padding-left:1rem;color:#ac9e7e;">收入合计 <strong style="color:#ffd966;">${formatMoney(data.incomeTotalWan || 0)}</strong>（含交易+月分红）</div>
-        <div></div>
-        <div><span style="color:#ff7f7f;">支出项：</span></div>
-        <div></div>
-        <div style="padding-left:1rem;">· 工资支出 ${formatMoney(data.payrollTotalWan || 0)}</div>
-        <div style="padding-left:1rem;">· 写字楼支出 ${formatMoney(data.rentTotalWan || 0)}</div>
-        <div style="padding-left:1rem;color:#ac9e7e;">支出合计 <strong style="color:#ff7f7f;">${formatMoney(data.expenseTotalWan || 0)}</strong></div>
-        <div></div>
-        <div style="padding-left:1rem;color:#ac9e7e;">净变动 <strong style="color:${(data.netChangeWan || 0) >= 0 ? '#7fff7f' : '#ff7f7f'};">${formatMoney(data.netChangeWan || 0)}</strong></div>
-        <div></div>
+  // 当月事件
+  const minorEventHtml = data.minorEvent && data.minorEvent !== '（无）'
+    ? `<div style="background:#2a3d22;border:1px solid #5e4b34;border-radius:0.5rem;padding:0.75rem;margin:0.5rem 0;"><p style="margin:0;white-space:pre-wrap;">${escapeHtml(String(data.minorEvent))}</p></div>`
+    : '<p class="hint" style="margin:0.5rem 0;">本月无特殊事件。</p>';
+
+  const hasDiv = (data.dividendTotalWan || 0) > 0;
+
+  // 各业务收入明细
+  const businessRows = (data.rows || [])
+    .map((r) => {
+      const kind = r.kind === 'fut' ? '期货' : '股票';
+      const dWan = r.dividendWan != null ? r.dividendWan : 0;
+      const totalIncome = (r.profitWan || 0) + (r.kind === 'stock' ? dWan : 0);
+      const divCell = r.kind === 'stock' && dWan > 0 ? `<span style="color:#7fff7f;">+${formatMoney(dWan)} 分红</span>` : '';
+      const incomeColor = totalIncome >= 0 ? '#7fff7f' : '#ff7f7f';
+      return `<tr>
+        <td>${escapeHtml(r.employeeName)}</td>
+        <td>${kind}</td>
+        <td style="color:${incomeColor};font-weight:600;">${totalIncome >= 0 ? '+' : ''}${formatMoney(totalIncome)}</td>
+        <td style="font-size:0.75rem;color:#ac9e7e;">${formatMoney(r.profitWan || 0)} ${divCell}</td>
+      </tr>`;
+    })
+    .join('') || '<tr><td colspan="4" class="hint">无在营业务</td></tr>';
+
+  // 公司营收汇总
+  const incomeSummary = `
+    <div style="background:#3d2c21;border:1px solid #e8a034;border-radius:0.75rem;padding:1rem;margin:0.75rem 0;">
+      <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:0.75rem;text-align:center;">
+        <div>
+          <div style="font-size:0.75rem;color:#ac9e7e;">业务总收入</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#7fff7f;">${formatMoney(data.incomeTotalWan || 0)}</div>
+        </div>
+        <div>
+          <div style="font-size:0.75rem;color:#ac9e7e;">总支出</div>
+          <div style="font-size:1.1rem;font-weight:700;color:#ff7f7f;">${formatMoney(data.expenseTotalWan || 0)}</div>
+        </div>
+        <div>
+          <div style="font-size:0.75rem;color:#ac9e7e;">净变动</div>
+          <div style="font-size:1.1rem;font-weight:700;color:${(data.netChangeWan || 0) >= 0 ? '#7fff7f' : '#ff7f7f'};">${(data.netChangeWan || 0) >= 0 ? '+' : ''}${formatMoney(data.netChangeWan || 0)}</div>
+        </div>
       </div>
+      <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid #5e4b34;display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;font-size:0.8rem;color:#ac9e7e;">
+        <div>月初现金: ${formatMoney(data.companyCashStartWan || 0)}</div>
+        <div style="text-align:right;">月末现金: <strong style="color:#ffd966;">${formatMoney(data.companyCashEndWan || 0)}</strong></div>
+      </div>
+    </div>
+  `;
+
+  // 支出明细
+  const expenseDetail = `
+    <div style="font-size:0.8rem;color:#ac9e7e;margin-top:0.5rem;">
+      <span>工资: ${formatMoney(data.payrollTotalWan || 0)}</span>
+      <span style="margin-left:1rem;">租金: ${formatMoney(data.rentTotalWan || 0)}</span>
+      ${hasDiv ? `<span style="margin-left:1rem;color:#7fff7f;">月分红: ${formatMoney(data.dividendTotalWan || 0)}</span>` : ''}
     </div>
   `;
 
   return `
     <div class="month-report-overlay" id="month-report-overlay" role="dialog" aria-modal="true">
       <div class="month-report-card">
-        <h2 class="section-title" style="margin-top:0;">月度报告 · ${y}年${m}月</h2>
-        <h3 class="section-title" style="font-size:0.95rem;">大事件（持续中，按 tick 前快照）</h3>
+        <h2 class="section-title" style="margin-top:0;text-align:center;">${y}年${m}月 经营报告</h2>
+
+        <!-- 事件区域 -->
+        <h3 class="section-title" style="font-size:0.95rem;border-color:#e8a034;">📢 事件动态</h3>
+        <h4 style="font-size:0.85rem;color:#ffeaac;margin:0.5rem 0 0.25rem 0;">大事件</h4>
         ${majorHtml}
-        <h3 class="section-title" style="font-size:0.95rem;">当月事件</h3>
-        <p style="white-space:pre-wrap;">${escapeHtml(String(data.minorEvent || '—'))}</p>
-        ${incomeSection}
-        <h3 class="section-title" style="font-size:0.95rem;">业务与交易明细</h3>
-        <p class="hint" style="margin:0.25rem 0 0.5rem 0;">月收益率为交易侧；股票业务另列月分红（成熟股权益、年股息按月计提）。</p>
-        <table class="data-table">
-          <thead><tr><th>员工</th><th>类型</th><th>月收益率</th><th>交易净利(万)</th><th>月分红(万)</th><th>结果</th></tr></thead>
-          <tbody>${rows}</tbody>
+        <h4 style="font-size:0.85rem;color:#ffeaac;margin:0.75rem 0 0.25rem 0;">本月事件</h4>
+        ${minorEventHtml}
+
+        <!-- 营收区域 -->
+        <h3 class="section-title" style="font-size:0.95rem;margin-top:1rem;border-color:#7fff7f;">💰 公司营收</h3>
+        ${incomeSummary}
+
+        <h4 style="font-size:0.85rem;color:#ffeaac;margin:0.75rem 0 0.25rem 0;">各业务收入明细</h4>
+        <table class="data-table" style="font-size:0.85rem;">
+          <thead><tr><th>负责人</th><th>类型</th><th>本月净收入</th><th style="font-size:0.75rem;">明细</th></tr></thead>
+          <tbody>${businessRows}</tbody>
         </table>
-        <h3 class="section-title" style="font-size:0.95rem;margin-top:0.75rem;">长期/筹资进度</h3>
-        ${Array.isArray(data.fundraisingRows) && data.fundraisingRows.length ? `
-          <table class="data-table" style="margin-top:0.25rem;"><thead><tr><th>员工</th><th>进度</th><th>目标募集(万)</th></tr></thead>
-          <tbody>
-            ${data.fundraisingRows
-              .map((r) => {
-                const emp = state.employees.find((e) => e.id === r.employeeId) || {};
-                return `<tr><td>${escapeHtml(emp.name || r.employeeName || '—')}</td><td>${r.elapsedMonths}/${r.totalMonths} 月</td><td>${formatMoney(r.expectedFundWan || 0)}</td></tr>`;
-              })
-              .join('')}
-          </tbody></table>
-        ` : '<p class="hint">本月无进行中的筹资项目。</p>'}
-        <button type="button" class="primary" data-action="dismiss-month-report">关闭并继续经营</button>
+        ${expenseDetail}
+
+        <div style="text-align:center;margin-top:1.5rem;">
+          <button type="button" class="primary" data-action="dismiss-month-report">关闭并继续经营</button>
+        </div>
       </div>
     </div>`;
 }
@@ -397,7 +389,7 @@ function renderV04Modals() {
     parts.push(`<div class="month-report-overlay" id="v04-ar-overlay" role="dialog" aria-modal="true">
       <div class="month-report-card" style="max-width:36rem;max-height:90vh;overflow:auto">
         <h2 class="section-title" style="margin-top:0">年度报告 · ${ar.year} 年</h2>
-        <p>总资产 <strong>${formatMoney(ar.totalAssetsWan)}</strong> · 年净利润 <strong>${formatMoney(ar.annualProfitWan)}</strong> · ROE <strong>${(ar.roe * 100).toFixed(1)}%</strong></p>
+        <p>总资产 <strong>${formatMoney(ar.totalAssetsWan)}</strong> · 年净利润 <strong>${formatMoney(ar.annualProfitWan)}</strong> · 净资产收益率 <strong>${(ar.roe * 100).toFixed(1)}%</strong></p>
         ${ar.isListed ? `<p>股价 <strong>${formatMoney(ar.sharePrice)}</strong> 万/股 · 市值 <strong>${formatMoney(ar.marketCapWan)}</strong></p>` : ''}
         <h3 class="section-title" style="font-size:0.95rem">股权结构</h3>
         <table class="data-table"><thead><tr><th>股东</th><th>持股</th><th>比例</th></tr></thead><tbody>${sh || '<tr><td colspan="3">—</td></tr>'}</tbody></table>
@@ -488,73 +480,76 @@ function formatIndustryTech(emp) {
     .join(' · ');
 }
 
-function renderGuidePanel() {
-  const guideable = state.activeBusinesses.filter((b) => b.kind === 'stock' || b.kind === 'fut');
-  const opts = guideable
-    .map((b) => {
-      const name = state.employees.find((e) => e.id === b.employeeId)?.name || '';
-      const k = b.kind === 'stock' ? '股票' : '期货';
-      return `<option value="${b.id}" data-kind="${b.kind}">${name} · ${k}</option>`;
-    })
-    .join('');
-
-  const weightGrid = config.stocks
-    .map((s) => {
-      return `<label>${s.shortName}<input type="number" class="guide-w narrow" data-stock-id="${s.id}" min="0" max="100" step="0.1" value="0" /></label>`;
-    })
-    .join('');
-
-  return `
-    <div class="panel">
-      <h2 class="section-title">本月指导（全公司 1 次）</h2>
-      <p class="hint">同一笔指导可同时修改：<strong>股票</strong>风格+组合（权重合计 100%）、<strong>期货</strong>杠杆，以及<strong>资金</strong>（正=公司划给业务增资，负=从业务减资划回公司；减资后 AUM 不少于 1 万）。上交模式会同步增减「初始本金」以便月结基数一致。</p>
-      <p>剩余指导：<strong>${state.guidanceRemaining}</strong> 次</p>
-      <div class="flex-row" style="margin:0.5rem 0;">
-        <label>目标业务 <select id="guide-biz">${opts || '<option value="">无在营业务</option>'}</select></label>
-        <label>资金调拨(万) <input type="number" id="guide-aum-delta" class="narrow" step="0.1" placeholder="不改则留空" title="正数增资、负数减资，可与策略同时提交" /></label>
-      </div>
-      <div id="guide-stock-block">
-        <p class="hint">股票指导风格</p>
-        <select id="guide-mode">
-          <option value="0">${STOCK_GUIDE_LABELS[0]}</option>
-          <option value="1" selected>${STOCK_GUIDE_LABELS[1]}</option>
-          <option value="2">${STOCK_GUIDE_LABELS[2]}</option>
-        </select>
-        <p class="hint" style="margin-top:0.5rem;">组合权重（%，总和须为 100；可只改风格不改组合）</p>
-        <div class="guide-grid" id="guide-weights">${weightGrid}</div>
-        <button type="button" class="small" data-action="guide-fill-equal">均分仓位（前4支或当前非零）</button>
-      </div>
-      <div id="guide-fut-block">
-        <p class="hint">期货杠杆</p>
-        <select id="guide-lev"><option value="1">1x</option><option value="2">2x</option><option value="3">3x</option></select>
-      </div>
-      <div style="margin-top:0.75rem;">
-        <button type="button" class="primary" data-action="apply-guide" ${state.guidanceRemaining < 1 ? 'disabled' : ''}>应用指导（消耗 1 次）</button>
-      </div>
-    </div>`;
-}
-
 // ========== C区域视图渲染函数 ==========
 
-// 根据宏观行情计算股票实际涨跌幅（万分比 -> 百分比显示）
-// 获取股票的三个影响因子（单位：万分比）
-function getStockFactors(stock, cMacro) {
-  const sec = config.sectors?.find((x) => x.id === stock.sectorId);
-  // 1. 大环境因子
-  const macroFactor = B_STOCK_BP_BY_C[cMacro] || 0;
-  // 2. 行业影响因子
-  const sectorFactor = sec?.sectorBetaBp || 0;
-  // 3. 个股自身影响因子（显示用成熟期值，实际结算用可复现随机）
-  const isMature = state.year >= (stock.matureYear || 2100);
-  const stockFactor = isMature ? (stock.matureBetaExtraBp || 0) : 0; // 成长期显示为0，实际用随机
-  return { macroFactor, sectorFactor, stockFactor };
+// 计算波动率乘数（极端情绪时放大波动）
+function computeVolatilityMultiplier(sentiment) {
+  const m = Number(sentiment) || 50;
+  if (m > 85 || m < 15) return 1.4;
+  if (m > 70 || m < 30) return 1.2;
+  return 1.0;
 }
 
-// 计算股票总收益率（基于三个因子）
+// 根据宏观行情计算股票实际涨跌幅（与实际结算保持一致）
+// 获取股票的完整影响因子（单位：万分比）
+function getStockFactors(stock, cMacro, orderIndex = 0) {
+  const sec = config.sectors?.find((x) => x.id === stock.sectorId);
+  const mcfg = getMacroConfigSync();
+  const macro = state?.macro;
+  const lines = macro?.lines || {};
+  const phase = macro?.cyclePhase;
+  const sentiment = macro?.sentiment ?? 50;
+  const baseRate = macro?.baseRate ?? 6;
+  const monthIndex = ymToMonthIndex(state.year, state.month);
+
+  // 1. 大环境因子（股市综合线）
+  const c = Math.max(0, Math.min(4, cMacro | 0));
+  const macroFactor = B_STOCK_BP_BY_C[c] || 0;
+
+  // 2. 行业因子（固定beta）
+  const sectorFactor = sec?.sectorBetaBp || 0;
+
+  // 3. 个股因子（与实际结算一致：成长期用随机，成熟期用配置值）
+  const stockFactor = getStockBetaExtraBp(stock, state.year, state.gameSeed, monthIndex);
+
+  // 4. 宏观联动因子（周期、利率、敏感度）
+  let macroExtraBp = 0;
+  let cycleBp = 0;
+  let rateBp = 0;
+  let lineBp = 0;
+  if (sec) {
+    cycleBp = computeCycleBonusBp(sec, phase, mcfg);
+    rateBp = computeRateEffectBp(sec, baseRate, mcfg?.neutralBaseRatePercent ?? 6);
+    lineBp = computeLineSensitivityBp(sec, lines, mcfg);
+    const stockMacroBp = stock.macroBetaBp || 0;
+    macroExtraBp = cycleBp + rateBp + lineBp + stockMacroBp;
+  }
+
+  // 5. 噪声因子（与实际结算一致：使用 businessNoiseH 生成确定性噪声）
+  const H = businessNoiseH(state.gameSeed, monthIndex, orderIndex, 'stock');
+  const volMult = computeVolatilityMultiplier(sentiment);
+  const baseNoise = noiseBpFromH(H, NOISE_BP);
+  const noiseFactor = Math.round(baseNoise * 3.2 * volMult);
+
+  return {
+    macroFactor,
+    sectorFactor,
+    stockFactor,
+    macroExtraBp,
+    noiseFactor,
+    cycleBp,
+    rateBp,
+    lineBp,
+    stockMacroBp: stock.macroBetaBp || 0,
+    isMature: state.year >= (stock.matureYear || 2100)
+  };
+}
+
+// 计算股票总收益率（与实际结算保持一致）
 function calculateStockReturn(stock, cMacro) {
-  const { macroFactor, sectorFactor, stockFactor } = getStockFactors(stock, cMacro);
-  // 总收益 = 大环境 + 行业 + 个股
-  const totalReturnBp = macroFactor + sectorFactor + stockFactor;
+  const { macroFactor, sectorFactor, stockFactor, macroExtraBp, noiseFactor } = getStockFactors(stock, cMacro);
+  // 总收益 = 大环境 + 行业 + 个股 + 宏观联动 + 噪声
+  const totalReturnBp = macroFactor + sectorFactor + stockFactor + macroExtraBp + noiseFactor;
   return (totalReturnBp / 100).toFixed(2);
 }
 
@@ -570,39 +565,44 @@ function calculateStockPrice(stock, cMacro) {
 function renderMarketView() {
   const cMacro = state.actualEquityC;
   const macroReturn = (B_STOCK_BP_BY_C[cMacro] / 100).toFixed(2);
+  const macro = state?.macro;
+  const sentiment = macro?.sentiment ?? 50;
+  const phase = macro?.cyclePhase || '—';
+  const baseRate = macro?.baseRate ?? 6;
   return `
     <div class="view-section">
       <h2 class="section-title">股票市场（均可配置进组合）</h2>
-      <p class="hint">本月宏观行情：股市 ${sentimentText(state.actualEquityC)} · 大环境因子 ${macroReturn}% · 成长股（高波动，不派息）vs 成熟期（低波动，派息）</p>
+      <p class="hint">本月宏观行情：股市 ${sentimentText(state.actualEquityC)} · 大环境因子 ${macroReturn}% · 情绪指数 ${sentiment}/100 · 周期阶段 ${phase} · 基准利率 ${baseRate}%</p>
       <table class="data-table">
-        <thead><tr><th>代码</th><th>简称</th><th>行业</th><th>阶段</th><th>成熟期</th><th>年股息</th><th>股价</th><th>本月涨跌</th><th>涨跌分解</th></tr></thead>
+        <thead><tr><th>代码</th><th>简称</th><th>行业</th><th>股价</th><th>本月涨跌</th><th>涨跌分解</th></tr></thead>
         <tbody>
           ${config.stocks
             .map((s) => {
               const sec = config.sectors?.find((x) => x.id === s.sectorId);
               const isMature = state.year >= (s.matureYear || 2100);
-              const phaseLabel = isMature ? '成熟期' : '成长期';
-              const phaseClass = isMature ? 'return-neutral' : 'return-bear';
               const price = calculateStockPrice(s, cMacro);
               const returnPct = calculateStockReturn(s, cMacro);
-              const { macroFactor, sectorFactor, stockFactor } = getStockFactors(s, cMacro);
+              const { macroFactor, sectorFactor, stockFactor, macroExtraBp, noiseFactor, cycleBp, rateBp, lineBp, stockMacroBp } = getStockFactors(s, cMacro);
               const returnClass = Number(returnPct) > 0 ? 'up' : Number(returnPct) < 0 ? 'down' : 'neutral';
               const returnIcon = Number(returnPct) > 0 ? '▲' : Number(returnPct) < 0 ? '▼' : '—';
-              const divLabel = isMature
-                ? `${((Number(s.dividendRateAnnual) || 0) * 100).toFixed(1)}%`
-                : '不派息';
+              // 构建详细的涨跌分解
+              const breakdownParts = [];
+              if (macroFactor !== 0) breakdownParts.push(`大环境${(macroFactor/100).toFixed(1)}%`);
+              if (sectorFactor !== 0) breakdownParts.push(`行业${(sectorFactor/100).toFixed(1)}%`);
+              if (stockFactor !== 0) breakdownParts.push(`${isMature ? '个股' : '成长波动'}${(stockFactor/100).toFixed(1)}%`);
+              if (cycleBp !== 0) breakdownParts.push(`周期${(cycleBp/100).toFixed(1)}%`);
+              if (rateBp !== 0) breakdownParts.push(`利率${(rateBp/100).toFixed(1)}%`);
+              if (lineBp !== 0) breakdownParts.push(`联动${(lineBp/100).toFixed(1)}%`);
+              if (stockMacroBp !== 0) breakdownParts.push(`宏观β${(stockMacroBp/100).toFixed(1)}%`);
+              if (noiseFactor !== 0) breakdownParts.push(`噪声${(noiseFactor/100).toFixed(1)}%`);
+              const breakdownText = breakdownParts.length > 0 ? breakdownParts.join(' + ') : '无波动';
               return `<tr>
                 <td>${s.id}</td>
                 <td>${s.shortName}</td>
                 <td>${sec?.name || s.sectorId}</td>
-                <td class="${phaseClass}" style="font-size:0.75rem;">${phaseLabel}</td>
-                <td style="font-size:0.75rem;">${s.matureYear || '—'}年</td>
-                <td style="font-size:0.75rem;">${divLabel}</td>
                 <td>${price}</td>
                 <td class="return-${returnClass}">${returnIcon} ${returnPct}%</td>
-                <td style="font-size:0.7rem;color:#ac9e7e;">
-                  大环境${(macroFactor/100).toFixed(1)}% + 行业${(sectorFactor/100).toFixed(1)}% + 个股${(stockFactor/100).toFixed(1)}%
-                </td>
+                <td style="font-size:0.7rem;color:#ac9e7e;">${breakdownText}</td>
               </tr>`;
             })
             .join('')}
@@ -775,7 +775,7 @@ function renderBusinessDetailView() {
       </div>
       <div class="panel">
         <p class="hint">每 ${b.checkIntervalMonths || 6} 个月进行投后检查（命运判定：破产/收购/IPO/晋级等）。</p>
-        <p>行业：${escapeHtml(b.industry || '—')}</p>
+        <p>行业：${INDUSTRIES?.[b.industry]?.icon || ''} ${escapeHtml(INDUSTRIES?.[b.industry]?.name || b.industry || '—')}</p>
       </div>
       <div class="panel">
         <h3 class="section-title">操作</h3>
@@ -823,8 +823,8 @@ function renderBusinessDetailView() {
           <div class="value">${pol}</div>
         </div>
         <div class="stat-box">
-          <div class="label">${b.kind === 'stock' ? '指导风格' : '杠杆'}</div>
-          <div class="value">${b.kind === 'stock' ? STOCK_GUIDE_LABELS[b.stockGuideMode ?? 1] : b.leverage + 'x'}</div>
+          <div class="label">${b.kind === 'fut' ? '杠杆' : '状态'}</div>
+          <div class="value">${b.kind === 'fut' ? b.leverage + 'x' : '运营中'}</div>
         </div>
       </div>
 
@@ -995,27 +995,7 @@ function renderNewBusinessView() {
     </div>`;
 }
 
-// 5. 本月指导视图
-function renderGuideView() {
-  if (!state.activeBusinesses.length) {
-    return `
-      <div class="view-section">
-        <h2 class="section-title">本月指导</h2>
-        <p class="hint">暂无可指导的业务。请先开设业务。</p>
-      </div>`;
-  }
-  const canGuide = state.activeBusinesses.some((b) => b.kind === 'stock' || b.kind === 'fut');
-  if (!canGuide) {
-    return `
-      <div class="view-section">
-        <h2 class="section-title">本月指导</h2>
-        <p class="hint">本月指导仅对<strong>股票/期货</strong>在营业务开放；房地产、初创等类型请通过各业务自身流程管理。</p>
-      </div>`;
-  }
-  return `<div class="view-section">${renderGuidePanel()}</div>`;
-}
-
-// 6. 人事视图（磁贴优先，与「新开业务」一致）
+// 5. 人事视图（磁贴优先，与「新开业务」一致）
 function renderHrView() {
   const tierLabels = { junior: '初级', mid: '中级', senior: '高级' };
   const prom = state.employees.filter((e) => canPromote(e));
@@ -1301,17 +1281,70 @@ function renderCompanyView() {
     </div>`;
 }
 
+function renderMacroDetailView() {
+  const m = state.macro;
+  if (!m) {
+    return `<div class="view-section"><p class="hint">宏观数据将在每月月初生成。</p></div>`;
+  }
+  const prev = m.previous;
+  const lines = m.lines || {};
+  const rows = Object.keys(lines)
+    .map((k) => {
+      const L = lines[k];
+      return `<tr><td>${escapeHtml(L.displayName || k)}</td><td>${L.baseBp != null ? L.baseBp : '—'}</td><td>${L.c != null ? L.c : '—'}</td></tr>`;
+    })
+    .join('');
+  return `<div class="view-section">
+    <h2 class="section-title">宏观经济</h2>
+    <div class="panel">
+      <p style="font-size:0.85rem;">${state.year}年${state.month}月 · 周期 <strong>${escapeHtml(m.cyclePhaseLabel || m.cyclePhase || '—')}</strong> · 已 ${m.monthsInPhase | 0} 月</p>
+      <p style="font-size:0.85rem;">r=${Number(m.baseRate).toFixed(2)}% · π=${Number(m.cpi).toFixed(2)}% · g=${Number(m.gdpGrowth).toFixed(2)}% · m=${m.sentiment | 0}</p>
+      ${
+        prev
+          ? `<p class="hint" style="font-size:0.75rem;">上月：r=${prev.baseRate != null ? Number(prev.baseRate).toFixed(2) : '—'}% · π=${prev.cpi != null ? Number(prev.cpi).toFixed(2) : '—'}% · g=${prev.gdpGrowth != null ? Number(prev.gdpGrowth).toFixed(2) : '—'}%</p>`
+          : ''
+      }
+      <table class="data-table"><thead><tr><th>宏观线</th><th>base_bp</th><th>c</th></tr></thead><tbody>${rows}</tbody></table>
+    </div>
+  </div>`;
+}
+
+function renderMarketDetailView() {
+  const mk = state.market;
+  if (!mk || !mk.industries) {
+    return `<div class="view-section"><p class="hint">市场数据尚未初始化（读档后次月自动加载）。</p></div>`;
+  }
+  const rows = Object.entries(mk.industries)
+    .map(([id, row]) => {
+      const npcs = Object.entries(row.npcs || {})
+        .map(([nid, sh]) => `${nid}: ${((sh || 0) * 100).toFixed(1)}%`)
+        .join('；');
+      const industryName = INDUSTRIES?.[id]?.name || id;
+      const industryIcon = INDUSTRIES?.[id]?.icon || '';
+      return `<tr><td>${industryIcon} ${escapeHtml(industryName)}</td><td>${formatMoney(row.totalMarketSizeWan)}</td><td>${((row.playerShareTotal || 0) * 100).toFixed(2)}%</td><td>${((row.otherShare || 0) * 100).toFixed(2)}%</td><td style="font-size:0.72rem;">${escapeHtml(npcs || '—')}</td></tr>`;
+    })
+    .join('');
+  return `<div class="view-section">
+    <h2 class="section-title">市场与竞争</h2>
+    <div class="panel">
+      <table class="data-table"><thead><tr><th>行业</th><th>总规模(万)</th><th>玩家</th><th>其他</th><th>NPC 份额</th></tr></thead><tbody>${rows}</tbody></table>
+      <p class="hint" style="margin-top:0.5rem;">业务组「扩展业务」累积扩张点，月结时有机会从「其他」转化为市占（受阈值与每月一次限制）。</p>
+    </div>
+  </div>`;
+}
+
 // 视图路由器
 const viewRenderers = {
-  'market': renderMarketView,
+  market: renderMarketView,
   'business-list': renderBusinessListView,
   'business-detail': renderBusinessDetailView,
   'business-groups': renderBusinessGroupsView,
   'business-group-detail': renderBusinessGroupDetailView,
   'new-business': renderNewBusinessView,
-  'guide': renderGuideView,
-  'hr': renderHrView,
-  'company': renderCompanyView,
+  hr: renderHrView,
+  company: renderCompanyView,
+  macro: renderMacroDetailView,
+  competition: renderMarketDetailView,
 };
 
 // ========== B区域侧边栏渲染 ==========
@@ -1325,14 +1358,12 @@ function renderSidebar() {
     btn.classList.toggle('active', view === currentView);
   });
 
-  // 渲染已开展业务列表
+  // 渲染已开展业务列表（包括常规业务和业务组）
   const bizList = $('#active-biz-list');
-  if (!state.activeBusinesses.length) {
-    bizList.innerHTML = '<p class="empty-biz-hint">暂无在营业务</p>';
-    return;
-  }
+  const allItems = [];
 
-  bizList.innerHTML = state.activeBusinesses.map((b) => {
+  // 添加常规业务
+  for (const b of state.activeBusinesses) {
     const emp = state.employees.find((e) => e.id === b.employeeId);
     const isActive = currentView === 'business-detail' && selectedBusinessId === b.id;
     const kindLabel =
@@ -1346,13 +1377,39 @@ function renderSidebar() {
     } else if (b.kind === 'startup_invest') {
       metaLine = `<span class="biz-aum">${escapeHtml(b.round || '—')}</span> · 投${formatMoney(b.investedWan)} · 估${formatMoney(b.valuationWan)}`;
     }
-    return `
-      <div class="biz-thumb ${isActive ? 'active' : ''}" data-action="view-business-detail" data-bid="${b.id}">
+    allItems.push({
+      type: 'business',
+      id: b.id,
+      html: `<div class="biz-thumb ${isActive ? 'active' : ''}" data-action="view-business-detail" data-bid="${b.id}">
         <div class="biz-name">${emp?.name || '未知'} · ${kindLabel}</div>
         <div class="biz-meta">${metaLine}</div>
-      </div>
-    `;
-  }).join('');
+      </div>`
+    });
+  }
+
+  // 添加业务组
+  if (bgManager && bgManager.groups) {
+    for (const g of bgManager.groups) {
+      const isActive = currentView === 'business-group-detail' && selectedBgId === g.id;
+      const leader = state.employees.find((e) => e.id === g.leaderId);
+      const metaLine = `🏢 业务组 · 市占 ${((g.metrics?.marketShare || 0) * 100).toFixed(1)}% · 估值 ${formatMoney(g.metrics?.valuationWan || 0)}`;
+      allItems.push({
+        type: 'group',
+        id: g.id,
+        html: `<div class="biz-thumb ${isActive ? 'active' : ''}" data-action="view-bg-detail" data-bgid="${g.id}">
+          <div class="biz-name">${leader?.name || '未分配'} · ${escapeHtml(g.name)}</div>
+          <div class="biz-meta">${metaLine}</div>
+        </div>`
+      });
+    }
+  }
+
+  if (allItems.length === 0) {
+    bizList.innerHTML = '<p class="empty-biz-hint">暂无在营业务</p>';
+    return;
+  }
+
+  bizList.innerHTML = allItems.map(item => item.html).join('');
 }
 
 function render() {
@@ -1427,7 +1484,7 @@ function render() {
           <button type="button" class="danger" data-action="new-game" title="重新开始新游戏（可输入种子）" style="margin-left:0.5rem;">快速重来</button>
         </div>
       </div>
-      <p class="month-dock-hint">「下一个月」与下方经营面板分离：本月内可并行操作行情、在营业务、指导、开业与人事，准备好后再点此推进回合。下月预测：股市 ${sentimentText(state.predictedEquityC)} · 大宗 ${sentimentText(state.predictedCommodityC)}</p>
+      <p class="month-dock-hint">「下一个月」与下方经营面板分离：本月内可并行操作行情、在营业务、开业与人事，准备好后再点此推进回合。下月预测：股市 ${sentimentText(state.predictedEquityC)} · 大宗 ${sentimentText(state.predictedCommodityC)}</p>
     `;
     bindActions(dock);
   }
@@ -1474,14 +1531,6 @@ function render() {
     wireKindToggle(root);
   } else if (currentView === 'hr' && selectedHrSubView === 'train') {
     wireTrainToggle(root);
-  } else if (currentView === 'guide') {
-    syncGuideBlocks(root);
-    const gbiz = $('#guide-biz', root);
-    gbiz?.addEventListener('change', () => {
-      syncGuideBlocks(root);
-      prefillGuideWeights(root);
-    });
-    prefillGuideWeights(root);
   }
 }
 
@@ -1533,7 +1582,8 @@ function renderBusinessGroupsView() {
       ${groups
         .map((g) => {
           const name = escapeHtml(g.name || g.id);
-          const industry = escapeHtml(g.industry || '-');
+          const industryName = INDUSTRIES?.[g.industry]?.name || g.industry || '-';
+          const industryIcon = INDUSTRIES?.[g.industry]?.icon || '';
           const val = formatMoney(g.metrics?.valuationWan || 0);
           const rev = formatMoney(g.metrics?.monthlyRevenueWan || 0);
           const ms = ((g.metrics?.marketShare || 0) * 100).toFixed(2) + '%';
@@ -1546,7 +1596,7 @@ function renderBusinessGroupsView() {
               <div style="margin-bottom:0.5rem;">
                 <strong style="color:#ffeaac;">${name}</strong>
               </div>
-              <div style="font-size:0.85rem;color:#ac9e7e;">${industry} · 估值 ${val}</div>
+              <div style="font-size:0.85rem;color:#ac9e7e;">${industryIcon} ${escapeHtml(industryName)} · 估值 ${val}</div>
               <div style="font-size:0.8rem;margin-top:0.5rem;">营收 ${rev} · 市占 ${ms} · 产品Lv ${pl}</div>
             </div>
           `;
@@ -1597,15 +1647,25 @@ function renderBusinessGroupDetailView() {
   const productsHtml = (g.products || [])
     .map((p) => {
       const pct = Math.round((p.progress || 0) * 100);
-      const status = p.completed ? '✅ 已完成' : `🔬 研发中 ${pct}%`;
+      let status = p.completed ? '✅ 已完成' : `🔬 研发中 ${pct}%`;
+      let outcomeHtml = '';
+      if (p.completed && p.outcome) {
+        const outcomeColor = p.outcome === 'failure' ? '#ff7f7f' : p.outcome === 'great_success' ? '#7fff7f' : '#ffd966';
+        const outcomeIcon = p.outcome === 'failure' ? '❌' : p.outcome === 'great_success' ? '🌟' : '✓';
+        const shareText = p.marketShareGained ? ` (+${(p.marketShareGained * 100).toFixed(2)}%)` : '';
+        status = `<span style="color:${outcomeColor};">${outcomeIcon} ${p.outcomeLabel || p.outcome}${shareText}</span>`;
+      }
       const barWidth = p.completed ? 100 : pct;
+      const barColor = p.completed
+        ? (p.outcome === 'failure' ? '#ff7f7f' : p.outcome === 'great_success' ? '#7fff7f' : '#e8a034')
+        : '#e8a034';
       return `<div style="margin:0.4rem 0;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <span style="font-weight:bold;">${escapeHtml(p.name)}</span>
           <span style="font-size:0.8rem;color:#ac9e7e;">${status}</span>
         </div>
         <div style="background:#3a2e1e;height:8px;border-radius:4px;margin-top:4px;overflow:hidden;">
-          <div style="background:#e8a034;height:100%;width:${barWidth}%;transition:width 0.3s;"></div>
+          <div style="background:${barColor};height:100%;width:${barWidth}%;transition:width 0.3s;"></div>
         </div>
       </div>`;
     })
@@ -1631,6 +1691,11 @@ function renderBusinessGroupDetailView() {
       <div class="stat-box"><div class="label">估值</div><div class="value">${formatMoney(g.metrics?.valuationWan)}</div></div>
       <div class="stat-box"><div class="label">月营收</div><div class="value">${formatMoney(g.metrics?.monthlyRevenueWan)}</div></div>
       <div class="stat-box"><div class="label">市占</div><div class="value">${((g.metrics?.marketShare || 0) * 100).toFixed(2)}%</div></div>
+      ${
+        state.market
+          ? `<div class="stat-box"><div class="label">扩张点</div><div class="value">${(g.expandPoints || 0).toFixed(1)}</div></div>`
+          : ''
+      }
       <div class="stat-box"><div class="label">产品等级</div><div class="value">${g.metrics?.productLevel ?? 0}</div></div>
     </div>
 
@@ -1670,12 +1735,13 @@ function renderBusinessGroupDetailView() {
         </button>
       </div>
       ${hasInProgress ? '<p class="hint">已有在研产品，完成前无法开始新的研发</p>' : ''}
+      ${state.market ? `<p class="hint">📈 扩张机制：每次扩展累积 ${(expandCost / 10).toFixed(1)} 扩张点，当前 <strong>${(g.expandPoints || 0).toFixed(1)}</strong> 点。月结时若达阈值（基础20点+市占加成），自动从「其他」争夺 0.5% 份额。</p>` : '<p class="hint">📈 扩展业务可直接提升市占率</p>'}
     </div>
 
     <div class="panel">
       <h3 class="section-title">信息与资金</h3>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
-        <p>行业：${escapeHtml(g.industry || '-')}</p>
+        <p>行业：${INDUSTRIES?.[g.industry]?.icon || ''} ${escapeHtml(INDUSTRIES?.[g.industry]?.name || g.industry || '-')}</p>
         <p>阶段：${escapeHtml(g.stage || '-')}</p>
         <p>业务组资金：${formatMoney(g.fundingWan || 0)}</p>
         <p>月工资支出：${formatMoney((bgManager.config.employeeSalaryWan || 5) * teamCount)}（${teamCount}人 × ${bgManager.config.employeeSalaryWan || 5}万）</p>
@@ -1715,42 +1781,6 @@ function wireTrainToggle(root) {
   };
   typeSel.addEventListener('change', sync);
   sync();
-}
-
-function syncGuideBlocks(root) {
-  const sel = $('#guide-biz', root);
-  if (!sel || !sel.value) {
-    $('#guide-stock-block', root)?.classList.add('hidden');
-    $('#guide-fut-block', root)?.classList.add('hidden');
-    return;
-  }
-  const opt = sel.options[sel.selectedIndex];
-  const k = opt?.getAttribute('data-kind');
-  $('#guide-stock-block', root)?.classList.toggle('hidden', k !== 'stock');
-  $('#guide-fut-block', root)?.classList.toggle('hidden', k !== 'fut');
-}
-
-function prefillGuideWeights(root) {
-  const sel = $('#guide-biz', root);
-  const bid = sel?.value;
-  const aumInp = $('#guide-aum-delta', root);
-  if (aumInp) aumInp.value = '';
-  if (!bid) return;
-  const b = state.activeBusinesses.find((x) => x.id === bid);
-  if (!b) return;
-  if (b.kind === 'stock') {
-    const gm = $('#guide-mode', root);
-    if (gm) gm.value = String(b.stockGuideMode ?? 1);
-    const map = new Map((b.stockPortfolio || []).map((p) => [p.stockId, p.weightBp]));
-    root.querySelectorAll('.guide-w').forEach((inp) => {
-      const sid = inp.getAttribute('data-stock-id');
-      const w = map.get(sid) || 0;
-      inp.value = String(w / 100);
-    });
-  } else if (b.kind === 'fut') {
-    const gl = $('#guide-lev', root);
-    if (gl) gl.value = String(b.leverage ?? 1);
-  }
 }
 
 function bindActions(...roots) {
@@ -1803,6 +1833,19 @@ function bindSidebarActions(sidebar) {
       }
     });
   });
+
+  // 业务组缩略列表
+  sidebar.querySelectorAll('[data-action="view-bg-detail"]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      const bgid = e.currentTarget.dataset.bgid;
+      if (bgid) {
+        if (currentView === 'hr') selectedHrSubView = null;
+        selectedBgId = bgid;
+        currentView = 'business-group-detail';
+        render();
+      }
+    });
+  });
 }
 
 function onPolicyChange(ev) {
@@ -1812,20 +1855,6 @@ function onPolicyChange(ev) {
   if (!r.ok) alert(r.error);
   saveToLocal(state);
   render();
-}
-
-function collectGuidePortfolio(root) {
-  const rows = [];
-  root.querySelectorAll('.guide-w').forEach((inp) => {
-    const pct = Number(inp.value);
-    if (!Number.isFinite(pct) || pct <= 0) return;
-    rows.push({ stockId: inp.getAttribute('data-stock-id'), weightBp: Math.round(pct * 100) });
-  });
-  const sum = rows.reduce((s, x) => s + x.weightBp, 0);
-  if (rows.length && Math.abs(sum - 10000) > 2) {
-    return { ok: false, error: `组合权重合计须为 100%（当前 ${(sum / 100).toFixed(1)}%）` };
-  }
-  return { ok: true, rows };
 }
 
 async function onAction(ev) {
@@ -1907,23 +1936,7 @@ async function onAction(ev) {
   }
 
   if (action === 'next-month') {
-    // 先运行业组月结（若已初始化），并保存到 localStorage
-    try {
-      if (bgManager) {
-        const dissolvedGroups = bgManager.tickMonth(state);
-        // 如果有被裁撤的业务组（人员为0），显示提示
-        if (dissolvedGroups && dissolvedGroups.length > 0) {
-          for (const g of dissolvedGroups) {
-            appendLog(state, `【业务组裁撤】${g.name} 人员为0，已自动裁撤，剩余资金 ${formatMoney(g.fundingWan || 0)} 返还母公司。`);
-          }
-          alert(`以下业务组因人员为0已被自动裁撤：\n${dissolvedGroups.map((g) => g.name).join('\n')}`);
-        }
-        saveBgToLocalStorage();
-      }
-    } catch (e) {
-      console.warn('businessGroups tickMonth failed', e);
-    }
-    const r = endTurn(state, config);
+    const r = endTurn(state, buildEndTurnConfig());
     if (!r.ok) alert(r.error);
     saveToLocal(state);
     render();
@@ -1945,7 +1958,6 @@ async function onAction(ev) {
       kind,
       allocWan: Number($('#dep-alloc')?.value),
       profitPolicy: $('#dep-policy')?.value || 'reinvest',
-      stockGuideMode: Number($('#dep-mode')?.value ?? 1),
       leverage: Number($('#dep-lev')?.value ?? 1),
       futuresVariantId: $('#dep-futvar')?.value || 'composite',
     };
@@ -1998,7 +2010,7 @@ async function onAction(ev) {
     const bp = cachedStartupBPs[idx];
     const empId = document.getElementById('dep-emp')?.value;
     if (!bp) {
-      alert('BP 数据失效，请返回重选');
+      alert('项目数据失效，请返回重选');
       return;
     }
     if (!empId) {
@@ -2098,10 +2110,8 @@ async function onAction(ev) {
       const { BusinessGroupsManager } = await import('./core/businessGroups.js');
       bgManager = new BusinessGroupsManager({});
     }
-    // 自动生成初始在研产品
-    bgManager.initGroupWithProduct(newGroup);
+    // createGroup 内部会自动生成初始在研产品，无需重复调用
     bgManager.createGroup(newGroup);
-    saveBgToLocalStorage();
 
     selectedNewBusinessKind = null;
     saveToLocal(state);
@@ -2195,56 +2205,6 @@ async function onAction(ev) {
     render();
     return;
   }
-  if (action === 'apply-guide') {
-    const bid = $('#guide-biz')?.value;
-    if (!bid) {
-      alert('请选择业务');
-      return;
-    }
-    const b = state.activeBusinesses.find((x) => x.id === bid);
-    const patch = {};
-    const rawAum = $('#guide-aum-delta')?.value;
-    if (rawAum != null && String(rawAum).trim() !== '') {
-      patch.aumDeltaWan = Number(rawAum);
-      if (!Number.isFinite(patch.aumDeltaWan)) {
-        alert('资金调拨须为有效数字');
-        return;
-      }
-    }
-    if (b?.kind === 'stock') {
-      patch.stockGuideMode = Number($('#guide-mode')?.value ?? 1);
-      const pr = collectGuidePortfolio(root);
-      if (!pr.ok) {
-        alert(pr.error);
-        return;
-      }
-      if (pr.rows.length) patch.stockPortfolio = pr.rows;
-    } else if (b?.kind === 'fut') {
-      patch.leverage = Number($('#guide-lev')?.value ?? 1);
-    }
-    const res = applyGuidance(state, bid, patch, config);
-    if (!res.ok) alert(res.error);
-    saveToLocal(state);
-    render();
-    return;
-  }
-  if (action === 'guide-fill-equal') {
-    const inputs = [...root.querySelectorAll('.guide-w')].filter((i) => Number(i.value) > 0);
-    const all = [...root.querySelectorAll('.guide-w')];
-    if (!inputs.length) {
-      const n = Math.min(4, all.length);
-      const pct = 100 / n;
-      all.slice(0, n).forEach((i) => {
-        i.value = String(pct);
-      });
-    } else {
-      const pct = 100 / inputs.length;
-      inputs.forEach((i) => {
-        i.value = String(pct);
-      });
-    }
-    return;
-  }
   if (action === 'close-business') {
     const bid = ev.currentTarget.getAttribute('data-bid');
     if (!confirm('结业？AUM 划回公司')) return;
@@ -2274,10 +2234,8 @@ async function onAction(ev) {
       // 将 IPO 写入内存 config.stocks，方便导出为 JSON（注意：前端无法直接写回仓库文件）
       config.stocks = config.stocks || [];
       config.stocks.push(ipo);
-      // 保存业务组数据 + IPO 快照到 localStorage，且保存游戏状态
-      saveBgToLocalStorage();
       saveToLocal(state);
-      alert('已在本次会话将 IPO 加入导出池，并已保存到 localStorage（key: investment-sim:bg）。可导出 JSON 手动合并。');
+      alert('已将 IPO 加入导出池。');
       console.log('Generated IPO object:', ipo);
       render();
     } catch (e) {
@@ -2316,7 +2274,6 @@ async function onAction(ev) {
     if (!g.teamIds) g.teamIds = [];
     if (!g.teamIds.includes(empId)) {
       g.teamIds.push(empId);
-      saveBgToLocalStorage();
       render();
     }
     return;
@@ -2354,13 +2311,11 @@ async function onAction(ev) {
         bgManager.groups = bgManager.groups.filter((grp) => grp.id !== bid);
         selectedBgId = null;
         currentView = 'business-groups';
-        saveBgToLocalStorage();
         saveToLocal(state);
         render();
         alert(`业务组 ${g.name} 人员为0，已自动裁撤，剩余资金已返还。`);
         return;
       }
-      saveBgToLocalStorage();
       render();
     }
     return;
@@ -2387,7 +2342,6 @@ async function onAction(ev) {
     // 执行注资
     state.companyCashWan = (state.companyCashWan || 0) - amount;
     g.fundingWan = (g.fundingWan || 0) + amount;
-    saveBgToLocalStorage();
     saveToLocal(state);
     render();
     return;
@@ -2409,7 +2363,6 @@ async function onAction(ev) {
       return;
     }
     g.monthlySpend = { rdWan, expandWan, patentWan };
-    saveBgToLocalStorage();
     render();
     return;
   }
@@ -2423,7 +2376,6 @@ async function onAction(ev) {
     const res = bgManager.startResearch(g);
     if (!res.ok) return alert(res.error);
     appendLog(state, `【业务组·研发】${g.name} 开始研发新产品「${res.product.name}」，花费 ${res.cost} 万。`);
-    saveBgToLocalStorage();
     render();
     return;
   }
@@ -2434,10 +2386,13 @@ async function onAction(ev) {
     if (!bid || !bgManager) return alert('参数错误');
     const g = bgManager.findGroup(bid);
     if (!g) return alert('找不到业务组');
-    const res = bgManager.expandMarket(g);
+    const res = bgManager.expandMarket(g, state);
     if (!res.ok) return alert(res.error);
-    appendLog(state, `【业务组·扩展】${g.name} 扩展业务，市占率提升 ${(res.gain * 100).toFixed(2)}%，花费 ${res.cost} 万。`);
-    saveBgToLocalStorage();
+    if (res.expandPoints != null) {
+      appendLog(state, `【业务组·扩展】${g.name} 投入 ${res.cost} 万，累积扩张点 ${res.expandPoints.toFixed(1)}（月结时或达阈值从「其他」争夺份额）。`);
+    } else {
+      appendLog(state, `【业务组·扩展】${g.name} 扩展业务，市占率提升 ${(res.gain * 100).toFixed(2)}%，花费 ${res.cost} 万。`);
+    }
     render();
     return;
   }
@@ -2489,7 +2444,6 @@ async function onAction(ev) {
     bgManager.groups = bgManager.groups.filter((grp) => grp.id !== bid);
     selectedBgId = null;
     currentView = 'business-groups';
-    saveBgToLocalStorage();
     saveToLocal(state);
     render();
     return;
@@ -2733,6 +2687,8 @@ async function bootstrap() {
     fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:realestate-load-success',message:'real estate config loaded',data:{},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
     await loadStartupConfig();
+    await loadMacroConfig();
+    await loadMarketConfig();
     // #region agent log - Hypothesis B: Startup config loaded
     fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:startup-load-success',message:'startup config loaded',data:{},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
@@ -2750,12 +2706,7 @@ async function bootstrap() {
       groupsUrl: `${base}/business-groups.json${cacheBuster}`,
       employeesUrl: `${base}/employees.json${cacheBuster}`,
     });
-    // 优先从 localStorage 恢复（若存在则覆盖/合并）
-    if (loadBgFromLocalStorage()) {
-      console.log('BusinessGroupsManager data loaded from localStorage');
-    } else {
-      console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
-    }
+    console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
   } catch (e) {
     console.warn('BusinessGroupsManager init failed', e);
   }
@@ -2787,7 +2738,7 @@ async function bootstrap() {
       saveAndRender: () => { saveToLocal(state); render(); },
       addBusiness: (draft) => addActiveBusiness(state, draft, config),
       closeBusiness: (id) => closeActiveBusiness(state, id),
-      endTurn: () => endTurn(state, config),
+      endTurn: () => endTurn(state, buildEndTurnConfig()),
       exportJson: () => exportJson(state),
       importJson: (t) => importJson(t),
       applyForListing: () => applyForListing(state),

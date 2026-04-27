@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "description": "宏观经济参数（v0.6）；可热更；与 macro.js 默认常量保持一致以便离线运行",
+  "neutralBaseRatePercent": 6,
+  "lineIds": [
+    "equity_composite",
+    "commodity_composite",
+    "real_estate",
+    "tech",
+    "overseas"
+  ],
+  "lineDisplayNames": {
+    "equity_composite": "股市综合",
+    "commodity_composite": "大宗商品",
+    "real_estate": "房地产",
+    "tech": "科技/互联网",
+    "overseas": "海外市场"
+  },
+  "gdpGrowthBands": [
+    { "gMin": 8, "gMax": 100, "name": "过热", "baseBp": { "equity_composite": 1200, "commodity_composite": 1500, "real_estate": 800, "tech": 1600, "overseas": 1000 } },
+    { "gMin": 4, "gMax": 8, "name": "繁荣", "baseBp": { "equity_composite": 800, "commodity_composite": 800, "real_estate": 500, "tech": 1000, "overseas": 600 } },
+    { "gMin": 0, "gMax": 4, "name": "平稳", "baseBp": { "equity_composite": 200, "commodity_composite": 0, "real_estate": 200, "tech": 300, "overseas": 100 } },
+    { "gMin": -4, "gMax": 0, "name": "轻度衰退", "baseBp": { "equity_composite": -300, "commodity_composite": -400, "real_estate": -200, "tech": -500, "overseas": -300 } },
+    { "gMin": -100, "gMax": -4, "name": "深度衰退", "baseBp": { "equity_composite": -800, "commodity_composite": -1000, "real_estate": -600, "tech": -1200, "overseas": -800 } }
+  ],
+  "rateEffectBpPer1Percent": {
+    "equity_composite": -100,
+    "commodity_composite": -50,
+    "real_estate": -200,
+    "tech": -50,
+    "overseas": 50
+  },
+  "sentimentEffectBpPer10Points": {
+    "equity_composite": 80,
+    "commodity_composite": 20,
+    "real_estate": 30,
+    "tech": 100,
+    "overseas": 50
+  },
+  "noiseBpHalfRange": 200,
+  "cyclePhaseDefinitions": {
+    "stagnation": { "label": "温和", "equityBpAdd": 0, "realEstateBpAdd": 0 },
+    "recovery": { "label": "复苏", "gMin": 0, "gMax": 4, "cpiMax": 3, "equityBpAdd": 400, "sentimentMPerMonth": 2, "realEstateBpAdd": 200 },
+    "boom": { "label": "繁荣", "gMin": 4, "cpiMin": 3, "cpiMax": 6, "equityBpAdd": 800, "realEstateBpAdd": 400 },
+    "overheat": { "label": "过热", "gMin": 8, "cpiMin": 6, "equityBpAdd": 300, "realEstateBpAdd": 200, "volatilityNote": "加息概率上升" },
+    "recession": { "label": "衰退", "gMin": -4, "gMax": 0, "cpiMax": 2, "equityBpAdd": -600, "realEstateBpAdd": -300 },
+    "depression": { "label": "萧条", "gMax": -4, "equityBpAdd": -1200, "realEstateBpAdd": -800 }
+  },
+  "cycleMarkov": {
+    "phases": ["recovery", "boom", "overheat", "recession", "depression", "stagnation"],
+    "stagnation": { "label": "温和", "isFallback": true, "equityBpAdd": 0, "realEstateBpAdd": 0 },
+    "minStayMonths": 1,
+    "transitionProbByMonthIndexMod": 12,
+    "baseTransitionProb": 0.12,
+    "adjacencyBonus": 0.05
+  },
+  "reStockBonusBpByC": { "0": 200, "1": 100, "2": 0, "3": -150, "4": -300 },
+  "baseRateByYear": {
+    "1990": 8.5, "1991": 8.0, "1992": 7.5, "1993": 7.0, "1994": 7.0, "1995": 6.5,
+    "1996": 6.0, "1997": 6.0, "1998": 6.5, "1999": 5.5, "2000": 5.0, "2001": 4.5, "2002": 4.0,
+    "2003": 3.5, "2004": 3.5, "2005": 4.0, "2006": 4.5, "2007": 5.0, "2008": 4.0, "2009": 3.0,
+    "2010": 3.0, "2011": 3.5, "2012": 3.5, "2013": 3.5, "2014": 3.5, "2015": 3.0, "2016": 2.5,
+    "2017": 2.5, "2018": 2.5, "2019": 2.0, "2020": 1.5
+  },
+  "industryIdToMacroLineId": {
+    "finance": "equity_composite",
+    "realestate": "real_estate",
+    "tech": "tech",
+    "semiconductor": "tech",
+    "consumer": "equity_composite",
+    "medical": "equity_composite",
+    "energy": "commodity_composite",
+    "aerospace": "equity_composite"
+  }
+}

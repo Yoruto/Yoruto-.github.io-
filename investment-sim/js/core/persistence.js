@@ -125,6 +125,15 @@ export function loadFromLocal() {
     } catch (e) {
       console.warn('v0.4 state migration', e);
     }
+    try {
+      if (s && typeof s === 'object' && (s.schemaVersion | 0) === 6) {
+        s.schemaVersion = 7;
+        s.macro = s.macro ?? null;
+        s.market = s.market ?? null;
+      }
+    } catch (e) {
+      console.warn('v0.6 state migration', e);
+    }
     return s;
   } catch {
     return null;

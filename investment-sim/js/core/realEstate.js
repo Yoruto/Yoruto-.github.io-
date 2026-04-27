@@ -1,5 +1,6 @@
 import { roundWan, nextId, appendLog, employeeCanDeploy } from './state.js';
 import { ymToMonthIndex, mixUint32 } from './rng.js';
+import { realEstateLineRentBonusBp } from './macro.js';
 
 /**
  * realEstate - v0.5.1 基础骨架
@@ -208,7 +209,12 @@ export function processRealEstateMonthly(state, ord) {
   // Sales stage：按月回款
   if (stage.id === 'sales') {
     const salesMonths = stage.durationMonths || 1;
-    const monthlyRecovery = roundWan(ord.totalProceedsWan / salesMonths);
+    let monthlyRecovery = roundWan(ord.totalProceedsWan / salesMonths);
+    const cRe = state.macro?.lines?.real_estate?.c;
+    if (cRe != null) {
+      const bonusBp = realEstateLineRentBonusBp(cRe);
+      monthlyRecovery = roundWan(monthlyRecovery * (1 + bonusBp / 10000));
+    }
     state.companyCashWan = roundWan(state.companyCashWan + monthlyRecovery);
     ord.salesRemainingWan = roundWan((ord.salesRemainingWan || ord.totalProceedsWan) - monthlyRecovery);
     stage.elapsedMonths = (stage.elapsedMonths || 0) + 1;

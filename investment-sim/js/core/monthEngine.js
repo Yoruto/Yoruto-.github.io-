@@ -1,9 +1,6 @@
-import {
-  ymToMonthIndex,
-  rollMacroC,
-  rollPredictedC,
-  majorEventTriggerH,
-} from './rng.js';
+import { ymToMonthIndex, majorEventTriggerH } from './rng.js';
+import { applyMonthlyMacroState, getModelSentimentCForLine, predictNextMonthCForLine } from './macro.js';
+import { tickMarketCompetition, ensureMarketState } from './marketCompetition.js';
 import {
   settleMonthlyOrder,
   computePortfolioBetaExtraBp,
@@ -11,6 +8,7 @@ import {
   doesStockPayDividend,
   getStockBetaExtraBp,
   calculateConsultingRevenue,
+  computeFuturesMacroLinkageBp,
 } from './settlement.js';
 import { generateRandomPartialStockPortfolio, STOCK_PARTIAL_SLEEVE_BP } from './rng.js';
 import {
@@ -70,10 +68,6 @@ export function listingOk(listingYm, year, month) {
 
 /** 月初：扣款 + 大事件入栈 + 宏观（文档第十一节 1~3 合并为一步） */
 export function runMonthOpening(state) {
-  // #region agent log - Hypothesis C: runMonthOpening called
-  fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'monthEngine.js:opening-start',message:'runMonthOpening called',data:{phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month,cash:state?.companyCashWan},timestamp:Date.now()})}).catch(()=>{});
-  // #endregion
-
   if (state.gameOver || state.victory) return;
 
   pushDueMajorEvents(state);
@@ -114,15 +108,17 @@ export function runMonthOpening(state) {
     `【月初扣款】工资 ${roundWan(payroll)} 万，写字楼支出 ${roundWan(rent + tax)} 万（含物业税 ${roundWan(tax)} 万）。`,
   );
 
-  const idx = ymToMonthIndex(state.year, state.month);
-  const baseEq = rollMacroC(state.gameSeed, idx, 'equity');
-  const baseCo = rollMacroC(state.gameSeed, idx, 'commodity');
+  applyMonthlyMacroState(state);
+  ensureMarketState(state);
+
+  const baseEq = getModelSentimentCForLine(state, 'equity');
+  const baseCo = getModelSentimentCForLine(state, 'commodity');
   const applied = applyMajorStackToC(state, baseEq, baseCo);
   state.actualEquityC = applied.equityC;
   state.actualCommodityC = applied.commodityC;
 
-  state.predictedEquityC = rollPredictedC(state.gameSeed, idx + 1, 'equity');
-  state.predictedCommodityC = rollPredictedC(state.gameSeed, idx + 1, 'commodity');
+  state.predictedEquityC = predictNextMonthCForLine(state, 'equity_composite');
+  state.predictedCommodityC = predictNextMonthCForLine(state, 'commodity_composite');
 
   // 在进入 market 阶段前，检查公司发展阶段（初创/扩张/成熟）是否发生变更
   try {
@@ -238,7 +234,6 @@ export function addActiveBusiness(state, orderDraft, config) {
 
   const profitPolicy = orderDraft.profitPolicy === 'remit' ? 'remit' : 'reinvest';
 
-  const stockGuideMode = Math.max(0, Math.min(2, Number(orderDraft.stockGuideMode ?? 1) | 0));
   const leverage = Math.max(1, Math.min(3, Number(orderDraft.leverage ?? 1) | 0));
 
   let futuresVariantId = 'composite';
@@ -310,7 +305,6 @@ export function addActiveBusiness(state, orderDraft, config) {
     stockPortfolio,
     stockSleeveBp,
     futuresVariantId,
-    stockGuideMode,
     leverage,
     rngOrderSlot,
   });
@@ -372,109 +366,6 @@ export function confirmFundraisingWithEquity(state, accept) {
   appendLog(
     state,
     `【开业】${emp2.name} 开展 拉投资（目标 ${pending.expectedFundWan} 万，周期 ${pending.totalMonths} 个月，成功时约出让 ${pct}% 股份）。`,
-  );
-  return { ok: true };
-}
-
-/**
- * 每月 1 次：股票风格/组合、期货杠杆、业务资金增减可合并为一次操作。
- * @param {object} patch — { stockGuideMode?, leverage?, stockPortfolio?, aumDeltaWan? }
- */
-function portfolioKey(arr) {
-  const rows = (arr || [])
-    .map((x) => ({ stockId: x.stockId, weightBp: x.weightBp | 0 }))
-    .sort((a, b) => a.stockId.localeCompare(b.stockId));
-  return JSON.stringify(rows);
-}
-
-const GUIDE_MIN_AUM_WAN = 1;
-
-export function applyGuidance(state, businessId, patch, config) {
-  if (state.guidanceRemaining <= 0) return { ok: false, error: '本月指导次数已用尽' };
-  const b = state.activeBusinesses.find((x) => x.id === businessId);
-  if (!b) return { ok: false, error: '业务不存在' };
-
-  let aumDelta = 0;
-  if (patch.aumDeltaWan != null && patch.aumDeltaWan !== '') {
-    const d = Number(patch.aumDeltaWan);
-    if (Number.isFinite(d)) aumDelta = roundWan(d);
-  }
-  const hasAum = Math.abs(aumDelta) > 1e-9;
-
-  let changed = false;
-  const detailParts = [];
-
-  if (b.kind === 'stock') {
-    const hasMode = patch.stockGuideMode != null && patch.stockGuideMode !== '';
-    const hasPort = patch.stockPortfolio && patch.stockPortfolio.length;
-    if (!hasMode && !hasPort && !hasAum) {
-      return { ok: false, error: '请至少调整风格、组合权重和/或资金调拨（万元，正=增资，负=减资）' };
-    }
-    if (hasMode) {
-      const nm = Math.max(0, Math.min(2, Number(patch.stockGuideMode) | 0));
-      if (nm !== b.stockGuideMode) {
-        b.stockGuideMode = nm;
-        changed = true;
-        detailParts.push(`风格${nm}`);
-      }
-    }
-    if (hasPort) {
-      const sum = patch.stockPortfolio.reduce((s, x) => s + (x.weightBp | 0), 0);
-      if (sum !== 10000) return { ok: false, error: '组合权重须合计 10000（=100%）' };
-      for (const leg of patch.stockPortfolio) {
-        if (!config.stocks.find((s) => s.id === leg.stockId)) return { ok: false, error: `无效股票 ${leg.stockId}` };
-      }
-      const next = patch.stockPortfolio.map((x) => ({ stockId: x.stockId, weightBp: x.weightBp | 0 }));
-      if (portfolioKey(next) !== portfolioKey(b.stockPortfolio)) {
-        b.stockPortfolio = next;
-        changed = true;
-        detailParts.push('组合');
-      }
-    }
-  } else if (b.kind === 'fut') {
-    const hasLev = patch.leverage != null && patch.leverage !== '';
-    if (!hasLev && !hasAum) return { ok: false, error: '请选择杠杆和/或填写资金调拨' };
-    if (hasLev) {
-      const L = Math.max(1, Math.min(3, Number(patch.leverage) | 0));
-      if (L !== b.leverage) {
-        b.leverage = L;
-        changed = true;
-        detailParts.push(`${L}x`);
-      }
-    }
-  }
-
-  if (hasAum) {
-    if (aumDelta > 0) {
-      if (state.companyCashWan + 1e-9 < aumDelta) return { ok: false, error: '公司现金不足，无法增资' };
-    } else {
-      const out = roundWan(-aumDelta);
-      const nextAum = roundWan(b.aumWan - out);
-      if (nextAum + 1e-9 < GUIDE_MIN_AUM_WAN) {
-        return { ok: false, error: `减资后 AUM 须不少于 ${GUIDE_MIN_AUM_WAN} 万` };
-      }
-      if (b.profitPolicy === 'remit') {
-        const nextInit = roundWan(b.initialWan - out);
-        if (nextInit + 1e-9 < GUIDE_MIN_AUM_WAN) {
-          return { ok: false, error: `减资后上交本金须不少于 ${GUIDE_MIN_AUM_WAN} 万` };
-        }
-      }
-    }
-    state.companyCashWan = roundWan(state.companyCashWan - aumDelta);
-    b.aumWan = roundWan(b.aumWan + aumDelta);
-    if (b.profitPolicy === 'remit') b.initialWan = roundWan(b.initialWan + aumDelta);
-    changed = true;
-    detailParts.push(aumDelta > 0 ? `增资${aumDelta}万` : `减资${roundWan(-aumDelta)}万`);
-  }
-
-  if (!changed) return { ok: false, error: '与当前设置相同，未消耗指导' };
-
-  state.guidanceRemaining -= 1;
-  const emp = state.employees.find((e) => e.id === b.employeeId);
-  const kindLabel = b.kind === 'stock' ? '股票' : '期货';
-  appendLog(
-    state,
-    `【指导·${kindLabel}】${emp?.name || ''} ${detailParts.join('、')}（本月剩余 ${state.guidanceRemaining} 次）。`,
   );
   return { ok: true };
 }
@@ -711,10 +602,13 @@ export function runSettlement(state, config) {
       }
     }
 
-    const futRow =
-      ord.kind === 'fut'
-        ? config.futures.variants[ord.futuresVariantId].B_fut_bp_by_c
-        : null;
+    const futVar =
+      ord.kind === 'fut' ? config.futures.variants[ord.futuresVariantId] : null;
+    const futRow = futVar ? futVar.B_fut_bp_by_c : null;
+    const futMacroLinkageBp =
+      ord.kind === 'fut' && futVar
+        ? computeFuturesMacroLinkageBp(ord.futuresVariantId, futVar, state)
+        : 0;
 
     const cMacro = ord.kind === 'stock' ? state.actualEquityC : state.actualCommodityC;
 
@@ -727,14 +621,17 @@ export function runSettlement(state, config) {
       monthIndex,
       orderIndexInMonth: ord.rngOrderSlot,
       gameSeed: state.gameSeed,
-      stockGuideMode: ord.stockGuideMode,
       portfolioBetaBp: ord.kind === 'stock' ? portfolioBetaBp : undefined,
       portfolioSectorBp: ord.kind === 'stock' ? portfolioSectorBp : undefined,
       stockId: null,
       betaExtraBp: 0,
       futBpByC: futRow,
+      futMacroLinkageBp,
       leverage: ord.leverage,
       stockSleeveWeightBp: ord.kind === 'stock' ? (ord.stockSleeveBp ?? 10000) : undefined,
+      stockPortfolio: ord.stockPortfolio,
+      state,
+      config,
     });
 
     // 管理上限超额惩罚：如果当前 AUM 超过员工管理上限，收益减半
@@ -855,6 +752,31 @@ export function closeMonthAndAdvance(state) {
   rollMinorEvent(state, ymToMonthIndex(state.year, state.month), state.allowMinorEventThisMonth !== false);
   if (state.minorEventNote) appendLog(state, state.minorEventNote);
 
+  const macroSnap = state.macro
+    ? {
+        baseRate: state.macro.baseRate,
+        cpi: state.macro.cpi,
+        gdpGrowth: state.macro.gdpGrowth,
+        sentiment: state.macro.sentiment,
+        cyclePhase: state.macro.cyclePhase,
+        cyclePhaseLabel: state.macro.cyclePhaseLabel,
+        monthsInPhase: state.macro.monthsInPhase,
+        lines: state.macro.lines ? JSON.parse(JSON.stringify(state.macro.lines)) : null,
+        previous: state.macro.previous || null,
+      }
+    : null;
+  let marketSnap = null;
+  if (state.market && state.market.industries) {
+    marketSnap = {};
+    for (const [id, row] of Object.entries(state.market.industries)) {
+      marketSnap[id] = {
+        totalMarketSizeWan: row.totalMarketSizeWan,
+        playerShareTotal: row.playerShareTotal,
+        otherShare: row.otherShare,
+        npcs: { ...(row.npcs || {}) },
+      };
+    }
+  }
   state.monthReportData = buildMonthReportData({
     closedYear: closedY,
     closedMonth: closedM,
@@ -868,6 +790,8 @@ export function closeMonthAndAdvance(state) {
     companyCashStartWan: cashStart,
     companyCashEndWan: cashEnd,
     activeBusinessesSnapshot: JSON.parse(JSON.stringify(state.activeBusinesses || [])),
+    macroSnapshot: macroSnap,
+    marketSnapshot: marketSnap,
   });
   state.showMonthReport = true;
 
@@ -878,7 +802,6 @@ export function closeMonthAndAdvance(state) {
     return;
   }
 
-  state.guidanceRemaining = 1;
   state.monthOrders = [];
   state.trainedThisMonth = false;
   state.trainedEmployeeId = null;
@@ -902,6 +825,14 @@ export function endTurn(state, config) {
   if (state.showMonthReport) return { ok: false, error: '请先阅毕月度报告' };
 
   runSettlement(state, config);
+  tickMarketCompetition(state, config?.businessGroups || null);
+  if (typeof config?.afterMarketTick === 'function') {
+    try {
+      config.afterMarketTick();
+    } catch (e) {
+      console.error('afterMarketTick', e);
+    }
+  }
   if (state.pendingMargin.length) {
     state.phase = 'margin';
     return { ok: true, needMargin: true };
@@ -1171,6 +1102,11 @@ export function serializeState(state) {
 
 export function deserializeState(json) {
   const o = JSON.parse(json);
+  if ((o.schemaVersion | 0) === 6) {
+    o.schemaVersion = 7;
+    o.macro = o.macro ?? null;
+    o.market = o.market ?? null;
+  }
   if (o.schemaVersion !== SCHEMA_VERSION) throw new Error('存档版本不兼容');
   return o;
 }
