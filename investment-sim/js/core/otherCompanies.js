@@ -7,10 +7,23 @@ let _cache = null;
 
 async function loadData() {
   if (_cache) return _cache;
-  const res = await fetch('data/investment-sim/other-companies.json');
-  if (!res.ok) throw new Error('无法加载 other-companies 数据');
-  _cache = await res.json();
-  return _cache;
+  const tryPaths = [
+    '../../../data/investment-sim/other-companies.json',
+    '/data/investment-sim/other-companies.json',
+  ];
+  let lastError = null;
+  for (const path of tryPaths) {
+    try {
+      const res = await fetch(path);
+      if (res.ok) {
+        _cache = await res.json();
+        return _cache;
+      }
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  throw new Error('无法加载 other-companies 数据: ' + (lastError?.message || 'all paths failed'));
 }
 
 export async function loadOtherCompanies() {

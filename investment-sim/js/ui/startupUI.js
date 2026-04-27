@@ -2,6 +2,54 @@ import { generateBPs, loadStartupConfig, startStartupInvestment } from '../core/
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * 生成 BP 列表 HTML
+ * @param {{ bps: object[], idleEmployees: {id:string,name:string}[], embedInForm?: boolean }} p
+ * @param embedInForm 为 true 时嵌入主表单，员工用上方 #dep-emp
+ */
+export function buildStartupNewBusinessHtml({ bps, idleEmployees, embedInForm }) {
+  if (!bps?.length) {
+    return '<p class="hint">暂无 BP（请确认已加载 startup-invest 与 startup-projects 配置）。</p>';
+  }
+  const cards = bps
+    .map((b, idx) => {
+      const pct = b.valuationWan > 0 ? ((b.raiseWan / b.valuationWan) * 100).toFixed(1) : '—';
+      return `
+      <div class="bp-card-sim" style="background:#2a1f1a;border:1px solid #5e4b34;border-radius:0.75rem;padding:0.75rem;flex:1;min-width:240px;max-width:100%;">
+        <div style="font-size:0.9rem;">🚀 <strong style="color:#ffeaac;">在研 / ${escapeHtml(b.name)}</strong></div>
+        <div style="font-size:0.78rem;color:#ac9e7e;margin:0.35rem 0;">行业 <strong>${escapeHtml(b.industry)}</strong> · 轮次 <strong>${escapeHtml(String(b.round))}</strong></div>
+        <div style="font-size:0.8rem;">估值 <strong>${b.valuationWan}</strong> 万 · 拟融资 <strong>${b.raiseWan}</strong> 万 · 约出让 ${pct}%</div>
+        <div style="margin-top:0.5rem;">
+          <button type="button" class="primary small" data-action="add-startup-invest" data-bp-idx="${idx}" ${idleEmployees.length ? '' : 'disabled'}>直接投资</button>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  const topHint = embedInForm
+    ? `<p class="hint">请在上方选择<strong>员工</strong>，再点下方 BP 的「直接投资」。尽调费 2%，每 6 个月命运判定（晋级/收购/IPO/破产等）。</p>`
+    : `<p class="hint">扩张期解锁：尽调费 2%，资金一次性划出；每 6 个月进行一轮命运判定（晋级/收购/IPO/破产等）。</p>
+      <div class="flex-row" style="margin-bottom:0.75rem;align-items:center;gap:0.75rem;">
+        <label>指派员工
+          <select id="su-emp">${
+            idleEmployees.length
+              ? idleEmployees.map((e) => `<option value="${escapeHtml(e.id)}">${escapeHtml(e.name)}</option>`).join('')
+              : '<option value="">无可用员工</option>'
+          }</select>
+        </label>
+      </div>`;
+
+  const block = `${topHint}
+      <div style="display:flex;flex-direction:column;gap:0.75rem;">${cards}</div>`;
+
+  if (embedInForm) return block;
+  return `<div class="panel">${block}</div>`;
+}
+
 export function initStartupUI(getState, saveAndRender) {
   // create a panel button in the header toolbar area (if exists)
   const container = document.getElementById('right-sidebar') || document.body;
@@ -107,10 +155,6 @@ export function initStartupUI(getState, saveAndRender) {
       await onInvestClick(draft);
       det.style.display = 'none';
     });
-  }
-
-  function escapeHtml(s) {
-    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
 
   // initial render

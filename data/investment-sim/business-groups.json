@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "groups": [
+    {
+      "id": "BG-EXAMPLE-1",
+      "name": "示例业务组",
+      "industry": "tech",
+      "ownerPlayerId": "PLAYER-EX",
+      "fundingWan": 1000,
+      "initialFundingWan": 1000,
+      "stage": "formation",
+      "teamIds": [],
+      "leaderId": null,
+      "metrics": {
+        "productLevel": 0,
+        "productProgress": 0,
+        "products": [],
+        "marketShare": 0,
+        "patentCount": 0,
+        "patentValueWan": 0,
+        "monthlyRevenueWan": 0,
+        "ttmRevenueWan": 0,
+        "valuationWan": 0
+      },
+      "monthlyBurnWan": 20,
+      "monthlySpend": { "rdWan": 0, "expandWan": 0, "patentWan": 0 },
+      "consecutiveProfitMonths": 0,
+      "createdAt": "1998-01"
+    }
+  ]
+}

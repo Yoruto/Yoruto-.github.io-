@@ -11,10 +11,8 @@ let _names = null;
 
 async function loadCfg() {
   if (_cfg) return _cfg;
-  // try multiple paths (relative to HTML page location)
   const tryPaths = [
-    '../data/investment-sim/startup-invest.json',
-    './data/investment-sim/startup-invest.json',
+    '../../../data/investment-sim/startup-invest.json',
     '/data/investment-sim/startup-invest.json',
   ];
   for (const path of tryPaths) {
@@ -42,8 +40,7 @@ async function loadCfg() {
 async function loadNames() {
   if (_names) return _names;
   const tryPaths = [
-    '../data/investment-sim/startup-projects.json',
-    './data/investment-sim/startup-projects.json',
+    '../../../data/investment-sim/startup-projects.json',
     '/data/investment-sim/startup-projects.json',
   ];
   for (const path of tryPaths) {
@@ -92,7 +89,32 @@ export async function generateBPs(count = 3, year = 2000, seed = 0) {
 }
 
 export async function loadStartupConfig() {
-  return await loadCfg();
+  const cfg = await loadCfg();
+  await loadNames();
+  return cfg;
+}
+
+/**
+ * 配置与项目名表已预加载时同步生成 BP（主界面新开业务用）
+ */
+export function generateBPsSync(count = 5, year = 2000, seed = 0) {
+  if (!_cfg || !_names) return [];
+  const cfg = _cfg;
+  const n = _names;
+  const industries = Object.keys(n.projectsByIndustry || {});
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const ind = industries[(seed + i) % industries.length];
+    const names = n.projectsByIndustry[ind];
+    const projectName = choice(names, seed + i) || `项目${i}`;
+    const rounds = (cfg.investmentRounds || []).filter((r) => (year || 2000) >= (r.unlockYear || 1990));
+    const round = rounds[(seed + i) % rounds.length] || rounds[0];
+    if (!round) continue;
+    const valuation = Math.round((round.minValuationWan + round.maxValuationWan) / 2);
+    const raise = Math.round(((round.typicalRaiseWan && round.typicalRaiseWan[0]) || 100) * 1);
+    out.push({ id: `bp-${seed}-${i}`, name: projectName, industry: ind, round: round.round, valuationWan: valuation, raiseWan: raise });
+  }
+  return out;
 }
 
 export function clearCache() {

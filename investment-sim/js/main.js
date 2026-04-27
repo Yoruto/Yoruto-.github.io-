@@ -57,17 +57,24 @@ import { saveToLocal, loadFromLocal, clearLocal, exportJson, importJson } from '
 import { initGM } from './core/gm.js';
 import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
 import { initOtherCompaniesUI } from './ui/otherCompaniesUI.js';
-import initStartupUI from './ui/startupUI.js';
-import { loadRealEstateConfig } from './core/realEstate.js';
-import { loadStartupConfig } from './core/startupInvest.js';
+import { buildStartupNewBusinessHtml } from './ui/startupUI.js';
+import { buildRealEstateNewBusinessHtml } from './ui/realEstateUI.js';
+import { loadRealEstateConfig, sampleProjectListSync, startRealEstateProject } from './core/realEstate.js';
+import { loadStartupConfig, generateBPsSync, startStartupInvestment } from './core/startupInvest.js';
+import BusinessGroupsManager from './core/businessGroups.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
 let config = null;
 let state = null;
+let bgManager = null;
 let currentView = 'market'; // 当前C区域显示的视图
 let selectedBusinessId = null; // 当前选中的业务ID（用于业务详情视图）
+let selectedBgId = null; // 当前选中的业务组 id（用于业务组详情视图）
 let selectedNewBusinessKind = null; // 新开业务：临时选择的磁贴（tile-first UI）
+/** 房地产 / 初创：新开业务页缓存的项目与 BP，供按钮回调读取 */
+let cachedReProjects = [];
+let cachedStartupBPs = [];
 /** 人事：null=磁贴选择；recruit | train | employees */
 let selectedHrSubView = null;
 
@@ -183,6 +190,53 @@ function ensurePlayerStockInConfig() {
     config.stocks.splice(idx, 1);
   }
 }
+
+// ===== Business Groups localStorage persistence helpers =====
+function loadBgFromLocalStorage() {
+  if (!bgManager) return false;
+  try {
+    const raw = localStorage.getItem('investment-sim:bg');
+    if (!raw) return false;
+    const obj = JSON.parse(raw);
+    if (obj.groups) bgManager.groups = obj.groups;
+    if (obj.employees) bgManager.employees = obj.employees;
+    // 合并此前生成的 IPO（避免重复 id）
+    if (obj.configStocks && Array.isArray(obj.configStocks)) {
+      config.stocks = config.stocks || [];
+      obj.configStocks.forEach((s) => {
+        if (!config.stocks.find((x) => x.id === s.id)) config.stocks.push(s);
+      });
+    }
+    return true;
+  } catch (e) {
+    console.warn('loadBgFromLocalStorage failed', e);
+    return false;
+  }
+}
+
+function saveBgToLocalStorage() {
+  if (!bgManager) return;
+  try {
+    const payload = {
+      groups: bgManager.groups || [],
+      employees: bgManager.employees || [],
+      configStocks: config?.stocks || [],
+      savedAt: Date.now(),
+    };
+    localStorage.setItem('investment-sim:bg', JSON.stringify(payload));
+  } catch (e) {
+    console.warn('saveBgToLocalStorage failed', e);
+  }
+}
+
+function clearBgLocalStorage() {
+  try {
+    localStorage.removeItem('investment-sim:bg');
+  } catch (e) {
+    console.warn('clearBgLocalStorage failed', e);
+  }
+}
+// ===== end persistence helpers =====
 
 /** 月度报告弹窗（已结束月份） */
 function renderMonthReportModal(data) {
@@ -435,10 +489,12 @@ function formatIndustryTech(emp) {
 }
 
 function renderGuidePanel() {
-  const opts = state.activeBusinesses
+  const guideable = state.activeBusinesses.filter((b) => b.kind === 'stock' || b.kind === 'fut');
+  const opts = guideable
     .map((b) => {
       const name = state.employees.find((e) => e.id === b.employeeId)?.name || '';
-      return `<option value="${b.id}" data-kind="${b.kind}">${name} · ${b.kind === 'stock' ? '股票' : '期货'}</option>`;
+      const k = b.kind === 'stock' ? '股票' : '期货';
+      return `<option value="${b.id}" data-kind="${b.kind}">${name} · ${k}</option>`;
     })
     .join('');
 
@@ -584,19 +640,41 @@ function renderBusinessListView() {
         ${state.activeBusinesses.map((b) => {
           const emp = state.employees.find((e) => e.id === b.employeeId);
           const pol = b.profitPolicy === 'reinvest' ? '复利' : '上交';
-          const typeClass = b.kind === 'stock' ? 'stock' : 'fut';
-          const typeName = b.kind === 'stock' ? '股票' : '期货';
+          const typeName =
+            b.kind === 'stock'
+              ? '股票'
+              : b.kind === 'fut'
+                ? '期货'
+                : b.kind === 'realestate'
+                  ? '房地产'
+                  : b.kind === 'startup_invest'
+                    ? '初创'
+                    : b.kind === 'consulting'
+                      ? '咨询'
+                      : b.kind === 'fundraising'
+                        ? '拉投资'
+                        : b.kind;
+          const typeClass = b.kind === 'stock' ? 'stock' : b.kind === 'fut' ? 'fut' : 'fut';
+          let extraAum = `<div style="font-size:0.8rem;color:#ffd966;">AUM: ${formatMoney(b.aumWan)}</div>
+              <div style="font-size:0.7rem;color:#ac9e7e;margin-top:0.25rem;">初始: ${formatMoney(b.initialWan)}</div>`;
+          if (b.kind === 'realestate') {
+            const st = b.stages && b.stages[b.currentStageIndex | 0];
+            extraAum = `<div style="font-size:0.8rem;color:#ffd966;">${escapeHtml(b.name || '项目')}</div>
+              <div style="font-size:0.7rem;color:#ac9e7e;margin-top:0.25rem;">阶段: ${st ? escapeHtml(st.name) : '—'} · 已投 ${formatMoney(b.paidWan)} / ${formatMoney(b.totalInvestWan)}</div>`;
+          } else if (b.kind === 'startup_invest') {
+            extraAum = `<div style="font-size:0.8rem;color:#ffd966;">${escapeHtml(b.name || '项目')}</div>
+              <div style="font-size:0.7rem;color:#ac9e7e;margin-top:0.25rem;">${escapeHtml(b.round || '—')} · 持股 ${(b.equityPercent | 0).toFixed(1)}% · 估 ${formatMoney(b.valuationWan)}</div>`;
+          }
           return `
             <div class="biz-card" data-action="view-business-detail" data-bid="${b.id}">
               <div class="card-header">
                 <span class="card-type ${typeClass}">${typeName}</span>
-                <span style="font-size:0.75rem;color:#ac9e7e">${pol}</span>
+                <span style="font-size:0.75rem;color:#ac9e7e">${b.kind === 'stock' || b.kind === 'fut' ? pol : '—'}</span>
               </div>
               <div style="margin-bottom:0.5rem;">
                 <strong style="color:#ffeaac;">${emp?.name || '未知'}</strong>
               </div>
-              <div style="font-size:0.8rem;color:#ffd966;">AUM: ${formatMoney(b.aumWan)}</div>
-              <div style="font-size:0.7rem;color:#ac9e7e;margin-top:0.25rem;">初始: ${formatMoney(b.initialWan)}</div>
+              ${extraAum}
             </div>
           `;
         }).join('')}
@@ -615,7 +693,96 @@ function renderBusinessDetailView() {
 
   const emp = state.employees.find((e) => e.id === b.employeeId);
   const pol = b.profitPolicy === 'reinvest' ? '复利' : '上交';
-  const typeName = b.kind === 'stock' ? '股票' : b.kind === 'fut' ? '期货' : b.kind === 'consulting' ? '咨询' : '拉投资';
+  const typeName =
+    b.kind === 'stock'
+      ? '股票'
+      : b.kind === 'fut'
+        ? '期货'
+        : b.kind === 'consulting'
+          ? '咨询'
+          : b.kind === 'fundraising'
+            ? '拉投资'
+            : b.kind === 'realestate'
+              ? '房地产'
+              : b.kind === 'startup_invest'
+                ? '初创投资'
+                : b.kind;
+
+  if (b.kind === 'realestate') {
+    const st = b.stages && b.stages[b.currentStageIndex | 0];
+    const stagesList = (b.stages || [])
+      .map(
+        (s) =>
+          `<li><strong>${escapeHtml(s.name)}</strong>：${(s.elapsedMonths | 0)}/${s.durationMonths} 月 · 已付 ${formatMoney(s.paidWan || 0)} / ${formatMoney(s.costWan || 0)} 万</li>`,
+      )
+      .join('');
+    return `
+    <div class="view-section">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+        <button type="button" class="small" data-action="switch-view" data-view="business-list">← 返回列表</button>
+        <h2 class="section-title" style="margin:0;">${emp?.name || '未知'} · 房地产 — ${escapeHtml(b.name || '')}</h2>
+      </div>
+      <div class="overview-stats" style="grid-template-columns:repeat(3,1fr);">
+        <div class="stat-box">
+          <div class="label">当前阶段</div>
+          <div class="value" style="font-size:0.95rem;">${st ? escapeHtml(st.name) : '—'}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">总投资额</div>
+          <div class="value">${formatMoney(b.totalInvestWan)}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">已投入资金</div>
+          <div class="value">${formatMoney(b.paidWan)}</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3 class="section-title">各阶段</h3>
+        <ul style="margin:0;padding-left:1.2rem;">${stagesList || '<li>—</li>'}</ul>
+        <p class="hint" style="margin-top:0.5rem;">类型：${escapeHtml(b.projectType || '—')} · 烂尾后项目会消失、已投损失。</p>
+      </div>
+      <div class="panel">
+        <h3 class="section-title">操作</h3>
+        <button type="button" class="danger" data-action="close-business" data-bid="${b.id}">终止项目</button>
+      </div>
+    </div>`;
+  }
+
+  if (b.kind === 'startup_invest') {
+    return `
+    <div class="view-section">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+        <button type="button" class="small" data-action="switch-view" data-view="business-list">← 返回列表</button>
+        <h2 class="section-title" style="margin:0;">${emp?.name || '未知'} · 初创 — ${escapeHtml(b.name || '')}</h2>
+      </div>
+      <div class="overview-stats" style="grid-template-columns:repeat(4,1fr);">
+        <div class="stat-box">
+          <div class="label">轮次</div>
+          <div class="value" style="font-size:0.9rem;">${escapeHtml(b.round || '—')}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">投资额</div>
+          <div class="value">${formatMoney(b.investedWan)}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">当前估值</div>
+          <div class="value">${formatMoney(b.valuationWan)}</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">持股比例</div>
+          <div class="value">${(b.equityPercent | 0).toFixed(1)}%</div>
+        </div>
+      </div>
+      <div class="panel">
+        <p class="hint">每 ${b.checkIntervalMonths || 6} 个月进行投后检查（命运判定：破产/收购/IPO/晋级等）。</p>
+        <p>行业：${escapeHtml(b.industry || '—')}</p>
+      </div>
+      <div class="panel">
+        <h3 class="section-title">操作</h3>
+        <button type="button" class="danger" data-action="close-business" data-bid="${b.id}">退出/核销</button>
+      </div>
+    </div>`;
+  }
 
   const sleeveBp = b.stockSleeveBp != null && b.stockSleeveBp >= 0 ? b.stockSleeveBp : 10000;
 
@@ -731,9 +898,11 @@ function renderNewBusinessView() {
         ? '期货'
         : selKind === 'consulting'
           ? '咨询'
-          : selKind === 'equity_issuance'
-            ? '增发股票'
-            : '拉投资';
+          : selKind === 'realestate'
+            ? '房地产'
+            : selKind === 'startup_invest'
+              ? '初创投资'
+              : '拉投资';
   if (selKind === 'equity_issuance') {
     return `
     <div class="view-section">
@@ -753,6 +922,47 @@ function renderNewBusinessView() {
       </div>
     </div>`;
   }
+
+  if (selKind === 'business_group') {
+    const idle = state.employees.filter((e) => employeeCanDeploy(state, e));
+    const canCreate = idle.length > 0;
+    return `
+    <div class="view-section">
+      <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
+        <button type="button" class="small" data-action="clear-newbiz">← 选择其他业务</button>
+        <h2 class="section-title">新开：业务组</h2>
+      </div>
+      <div class="panel">
+        <p class="hint">孵化新业务组，投入初始资金并指定负责人。业务组通过研发、市场扩展产生收入，最终可IPO上市。</p>
+        <div class="flex-row" style="gap:0.75rem; flex-wrap:wrap;">
+          <label>业务组名称<input type="text" id="bg-name" value="新业务组" style="width:120px;" /></label>
+          <label>行业<select id="bg-industry">${Object.keys(INDUSTRIES).map((k) => `<option value="${k}">${INDUSTRIES[k].icon} ${INDUSTRIES[k].name}</option>`).join('')}</select></label>
+          <label>负责人<select id="bg-leader">${idle.map((e) => `<option value="${e.id}">${e.name} ${formatAbilities(e)}</option>`).join('')}</select></label>
+          <label>初始资金(万)<input type="number" id="bg-funding" class="narrow" value="1000" min="100" /></label>
+          <label>月烧钱率(万)<input type="number" id="bg-burn" class="narrow" value="20" min="1" /></label>
+        </div>
+        <div style="margin-top:0.6rem;">
+          <button type="button" class="primary" data-action="add-business-group" ${canCreate ? '' : 'disabled'}>创建业务组</button>
+          ${!canCreate ? '<span class="hint"> 无空闲员工可用作负责人</span>' : ''}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  let reBlock = '';
+  let suBlock = '';
+  if (selKind === 'realestate') {
+    cachedReProjects = sampleProjectListSync(8, state.year);
+    reBlock = buildRealEstateNewBusinessHtml({ state, projects: cachedReProjects, idleEmployees: idle, embedInForm: true });
+  } else if (selKind === 'startup_invest') {
+    const suSeed = ((state.gameSeed | 0) * 10007 + (state.year | 0) * 1301 + (state.month | 0) * 17) >>> 0;
+    cachedStartupBPs = generateBPsSync(5, state.year, suSeed);
+    suBlock = buildStartupNewBusinessHtml({ bps: cachedStartupBPs, idleEmployees: idle, embedInForm: true });
+  }
+  const hideOpenBtn = selKind === 'realestate' || selKind === 'startup_invest';
+  const reWrapClass = selKind === 'realestate' ? '' : 'hidden';
+  const suWrapClass = selKind === 'startup_invest' ? '' : 'hidden';
+
   return `
     <div class="view-section">
       <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem;">
@@ -775,7 +985,9 @@ function renderNewBusinessView() {
         <div id="dep-consult-wrap" class="hidden" style="margin-top:0.5rem;">
           <label>行业 <select id="dep-industry">${Object.keys(INDUSTRIES).map((k) => `<option value="${k}">${INDUSTRIES[k].icon || ''} ${INDUSTRIES[k].name}</option>`).join('')}</select></label>
         </div>
-        <div style="margin-top:0.6rem;">
+        <div id="dep-realestate-wrap" class="${reWrapClass}" style="margin-top:0.5rem;">${reBlock}</div>
+        <div id="dep-startup-wrap" class="${suWrapClass}" style="margin-top:0.5rem;">${suBlock}</div>
+        <div id="dep-open-wrap" class="${hideOpenBtn ? 'hidden' : ''}" style="margin-top:0.6rem;">
           <button type="button" class="primary" data-action="add-order" ${idle.length ? '' : 'disabled'}>开业</button>
           ${!idle.length ? '<span class="hint"> 无空闲员工</span>' : ''}
         </div>
@@ -790,6 +1002,14 @@ function renderGuideView() {
       <div class="view-section">
         <h2 class="section-title">本月指导</h2>
         <p class="hint">暂无可指导的业务。请先开设业务。</p>
+      </div>`;
+  }
+  const canGuide = state.activeBusinesses.some((b) => b.kind === 'stock' || b.kind === 'fut');
+  if (!canGuide) {
+    return `
+      <div class="view-section">
+        <h2 class="section-title">本月指导</h2>
+        <p class="hint">本月指导仅对<strong>股票/期货</strong>在营业务开放；房地产、初创等类型请通过各业务自身流程管理。</p>
       </div>`;
   }
   return `<div class="view-section">${renderGuidePanel()}</div>`;
@@ -1086,6 +1306,8 @@ const viewRenderers = {
   'market': renderMarketView,
   'business-list': renderBusinessListView,
   'business-detail': renderBusinessDetailView,
+  'business-groups': renderBusinessGroupsView,
+  'business-group-detail': renderBusinessGroupDetailView,
   'new-business': renderNewBusinessView,
   'guide': renderGuideView,
   'hr': renderHrView,
@@ -1113,11 +1335,21 @@ function renderSidebar() {
   bizList.innerHTML = state.activeBusinesses.map((b) => {
     const emp = state.employees.find((e) => e.id === b.employeeId);
     const isActive = currentView === 'business-detail' && selectedBusinessId === b.id;
-    const kindLabel = { stock: '股票', fut: '期货', consulting: '咨询', fundraising: '拉投资' }[b.kind] || b.kind;
+    const kindLabel =
+      { stock: '股票', fut: '期货', consulting: '咨询', fundraising: '拉投资', realestate: '房地产', startup_invest: '初创' }[b.kind] || b.kind;
+    let metaLine = `AUM: <span class="biz-aum">${formatMoney(b.aumWan)}</span>`;
+    if (b.kind === 'realestate') {
+      const st = b.stages && b.stages[b.currentStageIndex | 0];
+      metaLine = st
+        ? `<span class="biz-aum">${escapeHtml(st.name)}</span> · ${(st.elapsedMonths | 0)}/${st.durationMonths | 0}月`
+        : '<span class="biz-aum">房地产</span>';
+    } else if (b.kind === 'startup_invest') {
+      metaLine = `<span class="biz-aum">${escapeHtml(b.round || '—')}</span> · 投${formatMoney(b.investedWan)} · 估${formatMoney(b.valuationWan)}`;
+    }
     return `
       <div class="biz-thumb ${isActive ? 'active' : ''}" data-action="view-business-detail" data-bid="${b.id}">
         <div class="biz-name">${emp?.name || '未知'} · ${kindLabel}</div>
-        <div class="biz-meta">AUM: <span class="biz-aum">${formatMoney(b.aumWan)}</span></div>
+        <div class="biz-meta">${metaLine}</div>
       </div>
     `;
   }).join('');
@@ -1263,16 +1495,207 @@ function wireKindToggle(root) {
       render();
       return;
     }
+    if (k !== selectedNewBusinessKind) {
+      selectedNewBusinessKind = k;
+      render();
+      return;
+    }
+    const isRe = k === 'realestate';
+    const isSu = k === 'startup_invest';
     $('#dep-fut-wrap', root)?.classList.toggle('hidden', k !== 'fut');
-    $('#dep-stock-wrap', root)?.classList.toggle('hidden', k !== 'stock');
     $('#dep-consult-wrap', root)?.classList.toggle('hidden', k !== 'consulting');
-    // 咨询与拉投资无需本金输入
-    $('#dep-alloc-wrap', root)?.classList.toggle('hidden', k === 'consulting' || k === 'fundraising');
-    // 利润分配仅在 股票/期货 显示
+    $('#dep-realestate-wrap', root)?.classList.toggle('hidden', !isRe);
+    $('#dep-startup-wrap', root)?.classList.toggle('hidden', !isSu);
+    const noAlloc = k === 'consulting' || k === 'fundraising' || isRe || isSu;
+    $('#dep-alloc-wrap', root)?.classList.toggle('hidden', noAlloc);
     $('#dep-policy-wrap', root)?.classList.toggle('hidden', k !== 'stock' && k !== 'fut');
+    $('#dep-open-wrap', root)?.classList.toggle('hidden', isRe || isSu);
   };
   kind.addEventListener('change', sync);
   sync();
+}
+
+// ========== 业务组视图渲染 ==========
+function renderBusinessGroupsView() {
+  const groups = bgManager?.groups || [];
+  if (!groups.length) {
+    return `
+      <div class="view-section">
+        <h2 class="section-title">业务组</h2>
+        <p class="hint">暂无业务组数据（或数据尚未加载）。</p>
+      </div>`;
+  }
+
+  return `
+  <div class="view-section">
+    <h2 class="section-title">业务组</h2>
+    <div class="business-grid">
+      ${groups
+        .map((g) => {
+          const name = escapeHtml(g.name || g.id);
+          const industry = escapeHtml(g.industry || '-');
+          const val = formatMoney(g.metrics?.valuationWan || 0);
+          const rev = formatMoney(g.metrics?.monthlyRevenueWan || 0);
+          const ms = ((g.metrics?.marketShare || 0) * 100).toFixed(2) + '%';
+          const pl = g.metrics?.productLevel ?? 0;
+          return `
+            <div class="biz-card" data-action="view-bg-detail" data-bid="${g.id}">
+              <div class="card-header">
+                <span class="card-type bg">业务组</span>
+              </div>
+              <div style="margin-bottom:0.5rem;">
+                <strong style="color:#ffeaac;">${name}</strong>
+              </div>
+              <div style="font-size:0.85rem;color:#ac9e7e;">${industry} · 估值 ${val}</div>
+              <div style="font-size:0.8rem;margin-top:0.5rem;">营收 ${rev} · 市占 ${ms} · 产品Lv ${pl}</div>
+            </div>
+          `;
+        })
+        .join('')}
+    </div>
+  </div>`;
+}
+
+function renderBusinessGroupDetailView() {
+  if (!bgManager) {
+    currentView = 'business-groups';
+    return renderBusinessGroupsView();
+  }
+  const g = bgManager.findGroup(selectedBgId);
+  if (!g) {
+    selectedBgId = null;
+    currentView = 'business-groups';
+    return renderBusinessGroupsView();
+  }
+
+  const maxTeamSize = bgManager.config.maxTeamSize || 5;
+  const teamCount = (g.teamIds || []).length;
+  const teamFull = teamCount >= maxTeamSize;
+
+  // 获取业务组成员列表（从母公司员工中查找）
+  const teamHtml = (g.teamIds || [])
+    .map((tid) => {
+      const e = state.employees.find((x) => x.id === tid);
+      if (!e) return '';
+      const isLeader = tid === g.leaderId;
+      return `<div style="margin:0.25rem 0;display:flex;align-items:center;gap:0.5rem;">
+        <span>${escapeHtml(e.name)} · 研${e.leadership ?? e.ability ?? '-'} 市${e.innovation ?? e.ability ?? '-'} 执${e.execution ?? e.ability ?? '-'}</span>
+        ${isLeader ? '<span style="color:#e8a034;font-size:0.75rem;">[负责人]</span>' : ''}
+        <button type="button" class="small danger" data-action="bg-remove-emp" data-eid="${tid}">移除</button>
+      </div>`;
+    })
+    .filter((html) => html)
+    .join('');
+
+  // 可调入的空闲员工
+  const idleEmployees = state.employees.filter((e) => {
+    const inAnyGroup = bgManager.groups.some((grp) => grp.teamIds?.includes(e.id));
+    return !inAnyGroup && !hasActiveBusiness(state, e.id);
+  });
+
+  // 在研产品列表
+  const productsHtml = (g.products || [])
+    .map((p) => {
+      const pct = Math.round((p.progress || 0) * 100);
+      const status = p.completed ? '✅ 已完成' : `🔬 研发中 ${pct}%`;
+      const barWidth = p.completed ? 100 : pct;
+      return `<div style="margin:0.4rem 0;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:bold;">${escapeHtml(p.name)}</span>
+          <span style="font-size:0.8rem;color:#ac9e7e;">${status}</span>
+        </div>
+        <div style="background:#3a2e1e;height:8px;border-radius:4px;margin-top:4px;overflow:hidden;">
+          <div style="background:#e8a034;height:100%;width:${barWidth}%;transition:width 0.3s;"></div>
+        </div>
+      </div>`;
+    })
+    .join('');
+
+  // 是否有在研产品（用于禁用研发按钮）
+  const hasInProgress = (g.products || []).some((p) => !p.completed);
+
+  // 动态费用与可用性判断
+  const rdCost = (bgManager?.config?.rdCostPerClick) || 50;
+  const expandCost = (bgManager?.config?.expandCostPerClick) || 50;
+  const canAffordResearch = (g.fundingWan || 0) >= rdCost && !hasInProgress;
+  const canAffordExpand = (g.fundingWan || 0) >= expandCost;
+
+  return `
+  <div class="view-section">
+    <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;">
+      <button type="button" class="small" data-action="switch-view" data-view="business-groups">← 返回列表</button>
+      <h2 class="section-title" style="margin:0;">${escapeHtml(g.name || g.id)}</h2>
+    </div>
+
+    <div class="overview-stats" style="grid-template-columns:repeat(4,1fr);">
+      <div class="stat-box"><div class="label">估值</div><div class="value">${formatMoney(g.metrics?.valuationWan)}</div></div>
+      <div class="stat-box"><div class="label">月营收</div><div class="value">${formatMoney(g.metrics?.monthlyRevenueWan)}</div></div>
+      <div class="stat-box"><div class="label">市占</div><div class="value">${((g.metrics?.marketShare || 0) * 100).toFixed(2)}%</div></div>
+      <div class="stat-box"><div class="label">产品等级</div><div class="value">${g.metrics?.productLevel ?? 0}</div></div>
+    </div>
+
+    <div class="panel">
+      <h3 class="section-title">团队 (${teamCount}/${maxTeamSize}人)</h3>
+      ${teamHtml || '<p class="hint">暂无成员（人员为0将被裁撤）</p>'}
+      ${idleEmployees.length > 0 && !teamFull ? `
+        <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid #5e4b34;">
+          <label>调入员工：<select id="bg-add-emp-select">
+            ${idleEmployees.map((e) => `<option value="${e.id}">${e.name} ${formatAbilities(e)}</option>`).join('')}
+          </select></label>
+          <button type="button" class="small" data-action="bg-add-emp" data-bid="${g.id}">调入</button>
+        </div>
+      ` : teamFull ? '<p class="hint">团队已满（最多5人）</p>' : '<p class="hint">当前无空闲员工可调入</p>'}
+    </div>
+
+    <div class="panel">
+      <h3 class="section-title">在研产品</h3>
+      ${productsHtml || '<p class="hint">暂无产品</p>'}
+    </div>
+
+    <div class="panel">
+      <h3 class="section-title">即时操作</h3>
+      <p class="hint">点击按钮立即执行，消耗业务组资金</p>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.5rem;">
+        <button type="button" class="small" data-action="bg-btn-research" data-bid="${g.id}" ${canAffordResearch ? '' : 'disabled'}>
+          🔬 研发产品 (-${rdCost}万)
+        </button>
+        <button type="button" class="small" data-action="bg-btn-expand" data-bid="${g.id}" ${canAffordExpand ? '' : 'disabled'}>
+          📈 扩展业务 (-${expandCost}万)
+        </button>
+        <button type="button" class="small" data-action="bg-btn-patent" data-bid="${g.id}" disabled>
+          📋 专利申请 (开发中)
+        </button>
+        <button type="button" class="small" data-action="bg-btn-train" data-bid="${g.id}" disabled>
+          🎓 人才培养 (开发中)
+        </button>
+      </div>
+      ${hasInProgress ? '<p class="hint">已有在研产品，完成前无法开始新的研发</p>' : ''}
+    </div>
+
+    <div class="panel">
+      <h3 class="section-title">信息与资金</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;">
+        <p>行业：${escapeHtml(g.industry || '-')}</p>
+        <p>阶段：${escapeHtml(g.stage || '-')}</p>
+        <p>业务组资金：${formatMoney(g.fundingWan || 0)}</p>
+        <p>月工资支出：${formatMoney((bgManager.config.employeeSalaryWan || 5) * teamCount)}（${teamCount}人 × ${bgManager.config.employeeSalaryWan || 5}万）</p>
+      </div>
+      <div style="margin-top:0.5rem;padding-top:0.5rem;border-top:1px solid #5e4b34;">
+        <label>母公司注资(万)：<input type="number" id="bg-inject-amount" class="narrow" value="100" min="1" /></label>
+        <button type="button" class="small" data-action="bg-inject-funding" data-bid="${g.id}">注资</button>
+        <span class="hint" style="margin-left:0.5rem;">母公司现金：${formatMoney(state.companyCashWan || 0)}</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 class="section-title">操作</h3>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button type="button" class="primary" data-action="business-ipo" data-bid="${g.id}" ${g.metrics?.valuationWan >= 200000 ? '' : 'disabled'}>申请 IPO</button>
+        <button type="button" class="danger" data-action="bg-close" data-bid="${g.id}">裁撤业务组</button>
+      </div>
+      ${g.metrics?.valuationWan < 200000 ? '<p class="hint">IPO要求：估值≥20万</p>' : ''}
+    </div>
+  </div>`;
 }
 
 function wireTrainToggle(root) {
@@ -1405,7 +1828,7 @@ function collectGuidePortfolio(root) {
   return { ok: true, rows };
 }
 
-function onAction(ev) {
+async function onAction(ev) {
   const action = ev.currentTarget.getAttribute('data-action');
   const root = $('#app');
 
@@ -1415,6 +1838,8 @@ function onAction(ev) {
     currentView = 'market';
     selectedBusinessId = null;
     selectedNewBusinessKind = null;
+    cachedReProjects = [];
+    cachedStartupBPs = [];
     selectedHrSubView = null;
     runMonthOpening(state);
     saveToLocal(state);
@@ -1457,6 +1882,17 @@ function onAction(ev) {
     return;
   }
 
+  // 查看业务组详情（来自业务组卡片）
+  if (action === 'view-bg-detail') {
+    const bid = ev.currentTarget.dataset.bid;
+    if (bid) {
+      selectedBgId = bid;
+      currentView = 'business-group-detail';
+      render();
+    }
+    return;
+  }
+
   // Tile-first: 选择新开业务磁贴
   if (action === 'select-newbiz') {
     selectedNewBusinessKind = ev.currentTarget.dataset.kind || null;
@@ -1471,6 +1907,22 @@ function onAction(ev) {
   }
 
   if (action === 'next-month') {
+    // 先运行业组月结（若已初始化），并保存到 localStorage
+    try {
+      if (bgManager) {
+        const dissolvedGroups = bgManager.tickMonth(state);
+        // 如果有被裁撤的业务组（人员为0），显示提示
+        if (dissolvedGroups && dissolvedGroups.length > 0) {
+          for (const g of dissolvedGroups) {
+            appendLog(state, `【业务组裁撤】${g.name} 人员为0，已自动裁撤，剩余资金 ${formatMoney(g.fundingWan || 0)} 返还母公司。`);
+          }
+          alert(`以下业务组因人员为0已被自动裁撤：\n${dissolvedGroups.map((g) => g.name).join('\n')}`);
+        }
+        saveBgToLocalStorage();
+      }
+    } catch (e) {
+      console.warn('businessGroups tickMonth failed', e);
+    }
     const r = endTurn(state, config);
     if (!r.ok) alert(r.error);
     saveToLocal(state);
@@ -1513,6 +1965,145 @@ function onAction(ev) {
       return;
     }
     if (!res.ok) alert(res.error);
+    saveToLocal(state);
+    render();
+    return;
+  }
+  if (action === 'add-realestate') {
+    const idx = Number(ev.currentTarget.getAttribute('data-re-idx'));
+    const proj = cachedReProjects[idx];
+    const empId = document.getElementById('dep-emp')?.value;
+    if (!proj) {
+      alert('项目数据失效，请返回重选');
+      return;
+    }
+    if (!empId) {
+      alert('请选择员工');
+      return;
+    }
+    void (async () => {
+      const res = await startRealEstateProject(state, empId, proj);
+      if (!res?.ok) {
+        alert(res?.error || '开工失败');
+        return;
+      }
+      saveToLocal(state);
+      selectedNewBusinessKind = null;
+      render();
+    })();
+    return;
+  }
+  if (action === 'add-startup-invest') {
+    const idx = Number(ev.currentTarget.getAttribute('data-bp-idx'));
+    const bp = cachedStartupBPs[idx];
+    const empId = document.getElementById('dep-emp')?.value;
+    if (!bp) {
+      alert('BP 数据失效，请返回重选');
+      return;
+    }
+    if (!empId) {
+      alert('请选择员工');
+      return;
+    }
+    void (async () => {
+      const res = await startStartupInvestment(state, empId, {
+        name: bp.name,
+        industry: bp.industry,
+        round: bp.round,
+        investWan: bp.raiseWan,
+        valuationWan: bp.valuationWan,
+      });
+      if (!res?.ok) {
+        alert(res?.error || '投资失败');
+        return;
+      }
+      saveToLocal(state);
+      selectedNewBusinessKind = null;
+      render();
+    })();
+    return;
+  }
+  if (action === 'add-business-group') {
+    const name = $('#bg-name')?.value?.trim();
+    const industry = $('#bg-industry')?.value;
+    const leaderId = $('#bg-leader')?.value;
+    const fundingInput = $('#bg-funding')?.value;
+    const burnInput = $('#bg-burn')?.value;
+
+    // 更安全的数值转换
+    const funding = parseFloat(fundingInput) || 0;
+    const burn = parseFloat(burnInput) || 0;
+
+    if (!name) {
+      alert('请输入业务组名称');
+      return;
+    }
+    if (!industry) {
+      alert('请选择行业');
+      return;
+    }
+    if (!leaderId) {
+      alert('请选择负责人');
+      return;
+    }
+    if (funding < 100) {
+      alert('初始资金至少100万');
+      return;
+    }
+
+    // 获取当前现金并验证
+    const currentCash = parseFloat(state?.companyCashWan) || 0;
+    if (currentCash < funding) {
+      alert(`公司现金不足，当前现金: ${formatMoney(currentCash)}，需要: ${formatMoney(funding)}`);
+      return;
+    }
+    state.companyCashWan = currentCash - funding;
+
+    // 获取负责人信息
+    const leader = state.employees.find((e) => e.id === leaderId);
+    if (!leader) {
+      alert('找不到负责人');
+      return;
+    }
+
+    // 创建业务组对象
+    const newGroup = {
+      id: `BG-${Date.now()}`,
+      name,
+      industry,
+      ownerPlayerId: 'PLAYER-001',
+      fundingWan: funding,
+      initialFundingWan: funding,
+      stage: 'formation',
+      teamIds: [leaderId],
+      leaderId: leaderId,
+      metrics: {
+        productLevel: 0,
+        productProgress: 0,
+        marketShare: 0,
+        patentCount: 0,
+        patentValueWan: 0,
+        monthlyRevenueWan: 0,
+        ttmRevenueWan: 0,
+        valuationWan: Math.round(funding * 0.6)
+      },
+      monthlyBurnWan: burn,
+      products: [],
+      createdAt: `${state.year}-${String(state.month).padStart(2, '0')}`,
+      consecutiveProfitMonths: 0
+    };
+
+    // 确保bgManager已初始化
+    if (!bgManager) {
+      const { BusinessGroupsManager } = await import('./core/businessGroups.js');
+      bgManager = new BusinessGroupsManager({});
+    }
+    // 自动生成初始在研产品
+    bgManager.initGroupWithProduct(newGroup);
+    bgManager.createGroup(newGroup);
+    saveBgToLocalStorage();
+
+    selectedNewBusinessKind = null;
     saveToLocal(state);
     render();
     return;
@@ -1668,6 +2259,242 @@ function onAction(ev) {
     render();
     return;
   }
+  if (action === 'business-ipo') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    if (!bgManager) return alert('业务组模块未加载');
+    const g = bgManager.findGroup(bid);
+    if (!g) return alert('找不到业务组');
+    // 检查IPO条件
+    if ((g.metrics?.valuationWan || 0) < 200000) {
+      alert('估值不足20万，无法IPO');
+      return;
+    }
+    try {
+      const ipo = bgManager.generateIPOObject(g);
+      // 将 IPO 写入内存 config.stocks，方便导出为 JSON（注意：前端无法直接写回仓库文件）
+      config.stocks = config.stocks || [];
+      config.stocks.push(ipo);
+      // 保存业务组数据 + IPO 快照到 localStorage，且保存游戏状态
+      saveBgToLocalStorage();
+      saveToLocal(state);
+      alert('已在本次会话将 IPO 加入导出池，并已保存到 localStorage（key: investment-sim:bg）。可导出 JSON 手动合并。');
+      console.log('Generated IPO object:', ipo);
+      render();
+    } catch (e) {
+      console.warn('IPO failed', e);
+      alert('生成 IPO 失败');
+    }
+    return;
+  }
+
+  // 业务组：添加员工
+  if (action === 'bg-add-emp') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    const empId = $('#bg-add-emp-select')?.value;
+    if (!bid || !empId) {
+      alert('参数错误');
+      return;
+    }
+    const g = bgManager?.findGroup(bid);
+    if (!g) {
+      alert('找不到业务组');
+      return;
+    }
+    // 检查团队人数上限
+    const maxSize = bgManager.config.maxTeamSize || 5;
+    if ((g.teamIds || []).length >= maxSize) {
+      alert(`团队已满，最多 ${maxSize} 人`);
+      return;
+    }
+    // 检查员工是否已经在其他业务组
+    const inAnyGroup = bgManager.groups.some((grp) => grp.id !== bid && grp.teamIds?.includes(empId));
+    if (inAnyGroup) {
+      alert('该员工已在其他业务组');
+      return;
+    }
+    // 添加到业务组
+    if (!g.teamIds) g.teamIds = [];
+    if (!g.teamIds.includes(empId)) {
+      g.teamIds.push(empId);
+      saveBgToLocalStorage();
+      render();
+    }
+    return;
+  }
+
+  // 业务组：移除员工
+  if (action === 'bg-remove-emp') {
+    const empId = ev.currentTarget.getAttribute('data-eid');
+    const bid = selectedBgId;
+    if (!bid || !empId) {
+      alert('参数错误');
+      return;
+    }
+    const g = bgManager?.findGroup(bid);
+    if (!g) {
+      alert('找不到业务组');
+      return;
+    }
+    // 移除员工
+    if (g.teamIds) {
+      g.teamIds = g.teamIds.filter((id) => id !== empId);
+      // 如果移除的是负责人，清空负责人
+      if (g.leaderId === empId) {
+        g.leaderId = null;
+      }
+      // 如果人员为0，自动裁撤
+      if (g.teamIds.length === 0) {
+        // 返还剩余资金给母公司
+        const remainingFunds = g.fundingWan || 0;
+        if (remainingFunds > 0) {
+          state.companyCashWan = (state.companyCashWan || 0) + remainingFunds;
+          appendLog(state, `【业务组裁撤】${g.name} 人员为0，自动裁撤，剩余资金 ${formatMoney(remainingFunds)} 返还母公司。`);
+        }
+        // 从bgManager中移除
+        bgManager.groups = bgManager.groups.filter((grp) => grp.id !== bid);
+        selectedBgId = null;
+        currentView = 'business-groups';
+        saveBgToLocalStorage();
+        saveToLocal(state);
+        render();
+        alert(`业务组 ${g.name} 人员为0，已自动裁撤，剩余资金已返还。`);
+        return;
+      }
+      saveBgToLocalStorage();
+      render();
+    }
+    return;
+  }
+
+  // 业务组：母公司注资
+  if (action === 'bg-inject-funding') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    const amount = parseFloat($('#bg-inject-amount')?.value) || 0;
+    if (!bid || amount <= 0) {
+      alert('请输入有效的注资金额');
+      return;
+    }
+    const g = bgManager?.findGroup(bid);
+    if (!g) {
+      alert('找不到业务组');
+      return;
+    }
+    // 检查母公司现金
+    if ((state.companyCashWan || 0) < amount) {
+      alert(`母公司现金不足，当前：${formatMoney(state.companyCashWan || 0)}`);
+      return;
+    }
+    // 执行注资
+    state.companyCashWan = (state.companyCashWan || 0) - amount;
+    g.fundingWan = (g.fundingWan || 0) + amount;
+    saveBgToLocalStorage();
+    saveToLocal(state);
+    render();
+    return;
+  }
+
+  // 业务组：设置月度支出
+  if (action === 'bg-set-spend') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    const rdWan = parseFloat($('#bg-spend-rd')?.value) || 0;
+    const expandWan = parseFloat($('#bg-spend-expand')?.value) || 0;
+    const patentWan = parseFloat($('#bg-spend-patent')?.value) || 0;
+    if (!bid) {
+      alert('参数错误');
+      return;
+    }
+    const g = bgManager?.findGroup(bid);
+    if (!g) {
+      alert('找不到业务组');
+      return;
+    }
+    g.monthlySpend = { rdWan, expandWan, patentWan };
+    saveBgToLocalStorage();
+    render();
+    return;
+  }
+
+  // 业务组：即时操作按钮 - 研发产品
+  if (action === 'bg-btn-research') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    if (!bid || !bgManager) return alert('参数错误');
+    const g = bgManager.findGroup(bid);
+    if (!g) return alert('找不到业务组');
+    const res = bgManager.startResearch(g);
+    if (!res.ok) return alert(res.error);
+    appendLog(state, `【业务组·研发】${g.name} 开始研发新产品「${res.product.name}」，花费 ${res.cost} 万。`);
+    saveBgToLocalStorage();
+    render();
+    return;
+  }
+
+  // 业务组：即时操作按钮 - 扩展业务
+  if (action === 'bg-btn-expand') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    if (!bid || !bgManager) return alert('参数错误');
+    const g = bgManager.findGroup(bid);
+    if (!g) return alert('找不到业务组');
+    const res = bgManager.expandMarket(g);
+    if (!res.ok) return alert(res.error);
+    appendLog(state, `【业务组·扩展】${g.name} 扩展业务，市占率提升 ${(res.gain * 100).toFixed(2)}%，花费 ${res.cost} 万。`);
+    saveBgToLocalStorage();
+    render();
+    return;
+  }
+
+  // 业务组：即时操作按钮 - 专利申请（占位）
+  if (action === 'bg-btn-patent') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    if (!bid || !bgManager) return alert('参数错误');
+    const g = bgManager.findGroup(bid);
+    if (!g) return alert('找不到业务组');
+    const res = bgManager.applyPatent(g);
+    alert(res.message || '专利申请功能开发中');
+    return;
+  }
+
+  // 业务组：即时操作按钮 - 人才培养（占位）
+  if (action === 'bg-btn-train') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    if (!bid || !bgManager) return alert('参数错误');
+    const g = bgManager.findGroup(bid);
+    if (!g) return alert('找不到业务组');
+    const res = bgManager.trainTalent(g);
+    alert(res.message || '人才培养功能开发中');
+    return;
+  }
+
+  // 业务组：裁撤
+  if (action === 'bg-close') {
+    const bid = ev.currentTarget.getAttribute('data-bid');
+    if (!bid) {
+      alert('参数错误');
+      return;
+    }
+    const g = bgManager?.findGroup(bid);
+    if (!g) {
+      alert('找不到业务组');
+      return;
+    }
+    if (!confirm(`确定要裁撤业务组 "${g.name}" 吗？剩余资金将返还母公司，所有人员将释放。`)) {
+      return;
+    }
+    // 返还剩余资金
+    const remainingFunds = g.fundingWan || 0;
+    if (remainingFunds > 0) {
+      state.companyCashWan = (state.companyCashWan || 0) + remainingFunds;
+    }
+    appendLog(state, `【业务组裁撤】${g.name} 被裁撤，剩余资金 ${formatMoney(remainingFunds)} 返还母公司。`);
+    // 从bgManager中移除
+    bgManager.groups = bgManager.groups.filter((grp) => grp.id !== bid);
+    selectedBgId = null;
+    currentView = 'business-groups';
+    saveBgToLocalStorage();
+    saveToLocal(state);
+    render();
+    return;
+  }
+
   if (action === 'dismiss-month-report') {
     dismissMonthReport(state);
     saveToLocal(state);
@@ -1915,6 +2742,23 @@ async function bootstrap() {
     // #endregion
     console.warn('加载地产配置失败', e);
   }
+  // 初始化业务组管理器（可选：从 data 加载示例业务组与员工池）
+  try {
+    bgManager = new BusinessGroupsManager({});
+    const base = `${origin}${pathBase}/data/investment-sim`;
+    await bgManager.loadFromUrls({
+      groupsUrl: `${base}/business-groups.json${cacheBuster}`,
+      employeesUrl: `${base}/employees.json${cacheBuster}`,
+    });
+    // 优先从 localStorage 恢复（若存在则覆盖/合并）
+    if (loadBgFromLocalStorage()) {
+      console.log('BusinessGroupsManager data loaded from localStorage');
+    } else {
+      console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
+    }
+  } catch (e) {
+    console.warn('BusinessGroupsManager init failed', e);
+  }
   // saveToLocal(state); // 屏蔽自动保存
 
   if (state.phase === 'opening' && !state.gameOver && !state.victory) {
@@ -1949,12 +2793,6 @@ async function bootstrap() {
       applyForListing: () => applyForListing(state),
       ensureCompanyEquity: () => ensureCompanyEquity(state),
     });
-    // 初始化初创投资侧边面板
-    try {
-      initStartupUI(() => state, () => { saveToLocal(state); render(); });
-    } catch (e) {
-      console.warn('初始化初创 UI 失败', e);
-    }
     const ui = bindGMUI(gm);
     const btn = renderGMButton();
     // 初始隐藏按钮，按 ` 打开

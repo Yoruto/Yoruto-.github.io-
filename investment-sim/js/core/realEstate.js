@@ -13,8 +13,7 @@ let _cfg = null;
 async function loadCfg() {
   if (_cfg) return _cfg;
   const tryPaths = [
-    '../data/investment-sim/real-estate-projects.json',
-    './data/investment-sim/real-estate-projects.json',
+    '../../../data/investment-sim/real-estate-projects.json',
     '/data/investment-sim/real-estate-projects.json',
   ];
   for (const path of tryPaths) {
@@ -37,18 +36,38 @@ export async function loadRealEstateConfig() {
 
 export async function sampleProjectList(count = 6, year = 2000) {
   const cfg = await loadCfg();
-  const types = Object.keys(cfg.projectTypes || {});
+  return sampleProjectListFromCfg(cfg, count, year);
+}
+
+/**
+ * 配置已预加载时同步生成项目列表（用于 UI 同步渲染，避免 async render）
+ * @param {number} count
+ * @param {number} year 游戏年：用于过滤已解锁的 projectType
+ */
+export function sampleProjectListSync(count = 6, year = 2000) {
+  if (!_cfg) return [];
+  return sampleProjectListFromCfg(_cfg, count, year);
+}
+
+function sampleProjectListFromCfg(cfg, count, year) {
+  const y = year | 0;
+  const allTypes = Object.keys(cfg.projectTypes || {});
+  const types = allTypes.filter((t) => (cfg.projectTypes[t].unlockYear || 1990) <= y);
+  // 早年份可能无已解锁类型：退化为全部模板，避免空白列表
+  const useTypes = types.length ? types : allTypes;
+  if (!useTypes.length) return [];
   const out = [];
   for (let i = 0; i < count; i++) {
-    const t = types[i % types.length];
+    const t = useTypes[i % useTypes.length];
     const tp = cfg.projectTypes[t];
+    if (!tp) continue;
     const loc = cfg.locationPrefixes[i % cfg.locationPrefixes.length] || '某地';
     const ser = cfg.seriesSuffixes[i % cfg.seriesSuffixes.length] || '';
     const nameTemplate = tp.nameTemplates[0] || '{location}{series}项目';
     const name = nameTemplate.replace('{location}', loc).replace('{series}', ser);
     const cycle = Math.floor((tp.cycleMonthsMin + tp.cycleMonthsMax) / 2);
     const invest = Math.round((tp.investMinWan + tp.investMaxWan) / 2);
-    out.push({ id: `re-${t}-${i}`, type: t, name, cycleMonths: cycle, investWan: invest, roiMin: tp.roiMin, roiMax: tp.roiMax, risk: tp.riskLevel });
+    out.push({ id: `re-${t}-${i}-${y}`, type: t, name, cycleMonths: cycle, investWan: invest, roiMin: tp.roiMin, roiMax: tp.roiMax, risk: tp.riskLevel });
   }
   return out;
 }

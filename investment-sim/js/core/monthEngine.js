@@ -486,6 +486,12 @@ export function closeActiveBusiness(state, businessId) {
   const b = state.activeBusinesses[i];
   const emp = state.employees.find((e) => e.id === b.employeeId);
   const name = emp?.name || '';
+  if (b.kind === 'realestate' || b.kind === 'startup_invest') {
+    state.activeBusinesses.splice(i, 1);
+    const kindLabel = b.kind === 'realestate' ? '房地产' : '初创投资';
+    appendLog(state, `【结业】${name} 的${kindLabel}项目「${b.name || '—'}」已终止（本类型无 AUM 划回公司）。`);
+    return { ok: true };
+  }
   const back = roundWan(b.aumWan);
   state.companyCashWan = roundWan(state.companyCashWan + back);
   state.activeBusinesses.splice(i, 1);
