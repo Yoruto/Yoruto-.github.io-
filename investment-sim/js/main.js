@@ -69,6 +69,14 @@ import { businessNoiseH, noiseBpFromH, mixUint32, ymToMonthIndex } from './core/
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
+function parseImportedState(text) {
+  const imported = importJson(text);
+  if (imported.schemaVersion !== SCHEMA_VERSION) {
+    throw new Error(`须为 schema ${SCHEMA_VERSION}`);
+  }
+  return imported;
+}
+
 function buildEndTurnConfig() {
   return {
     ...config,
@@ -2588,9 +2596,7 @@ async function onAction(ev) {
     const t = window.prompt('粘贴 JSON');
     if (!t) return;
     try {
-      const o = importJson(t);
-      if (o.schemaVersion !== SCHEMA_VERSION) throw new Error(`须为 schema ${SCHEMA_VERSION}`);
-      state = o;
+      state = parseImportedState(t);
       saveToLocal(state);
       render();
     } catch (e) {
@@ -2664,14 +2670,11 @@ async function bootstrap() {
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-assigned',message:'config object assigned',data:{configIsNull:config===null,hasStocks:!!config?.stocks,hasFutures:!!config?.futures},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
-  // [调试模式] 每次新开网页都是新游戏，屏蔽存档功能
-  // 如需恢复存档，取消下面注释并注释掉 state = createInitialState(1);
-  // state = loadFromLocal();
-  // if (!state || state.schemaVersion !== SCHEMA_VERSION) {
-  //   state = createInitialState(1);
-  //   saveToLocal(state);
-  // }
-  state = createInitialState(1);
+  state = loadFromLocal();
+  if (!state || state.schemaVersion !== SCHEMA_VERSION) {
+    state = createInitialState(1);
+    saveToLocal(state);
+  }
 
   // #region agent log - Hypothesis C: State created
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:state-created',message:'initial state created',data:{stateIsNull:state===null,phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month},timestamp:Date.now()})}).catch(()=>{});
@@ -2710,7 +2713,7 @@ async function bootstrap() {
   } catch (e) {
     console.warn('BusinessGroupsManager init failed', e);
   }
-  // saveToLocal(state); // 屏蔽自动保存
+  saveToLocal(state);
 
   if (state.phase === 'opening' && !state.gameOver && !state.victory) {
     // #region agent log - Hypothesis C: Running month opening
@@ -2720,7 +2723,7 @@ async function bootstrap() {
     // #region agent log - Hypothesis C: Month opening completed
     fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:opening-done',message:'runMonthOpening completed',data:{newPhase:state?.phase,cash:state?.companyCashWan},timestamp:Date.now()})}).catch(()=>{});
     // #endregion
-    // saveToLocal(state); // 屏蔽自动保存
+    saveToLocal(state);
   }
 
   // #region agent log - Hypothesis D/E: About to render
@@ -2740,7 +2743,8 @@ async function bootstrap() {
       closeBusiness: (id) => closeActiveBusiness(state, id),
       endTurn: () => endTurn(state, buildEndTurnConfig()),
       exportJson: () => exportJson(state),
-      importJson: (t) => importJson(t),
+      importJson: parseImportedState,
+      setState: (nextState) => { state = nextState; },
       applyForListing: () => applyForListing(state),
       ensureCompanyEquity: () => ensureCompanyEquity(state),
     });

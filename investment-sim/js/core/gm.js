@@ -170,7 +170,15 @@ export function initGM(api) {
         try { await navigator.clipboard?.writeText(j); return { ok:true, msg:'已复制 JSON 到剪贴板' }; } catch (e) { window.prompt('JSON', j); return { ok:true, msg:'导出至 prompt' }; }
       }
       if (verb === 'load') {
-        try { const t = await navigator.clipboard.readText(); const obj = api.importJson(t); api.saveAndRender(); return { ok:true, msg:'已从剪贴板导入' }; } catch (e) { return { ok:false, msg: String(e) }; }
+        try {
+          const t = await navigator.clipboard.readText();
+          const imported = api.importJson(t);
+          api.setState(imported);
+          api.saveAndRender();
+          return { ok:true, msg:'已从剪贴板导入' };
+        } catch (e) {
+          return { ok:false, msg: String(e) };
+        }
       }
       if (verb === 'state') {
         return { ok:true, msg: formatStateSummary(s) };
