@@ -326,4 +326,29 @@ export class BusinessGroupsManager {
   }
 }
 
+export function buildBusinessGroupsSnapshot(manager, config = null) {
+  return {
+    groups: manager?.groups || [],
+    employees: manager?.employees || [],
+    configStocks: config?.stocks || [],
+    savedAt: Date.now(),
+  };
+}
+
+export function applyBusinessGroupsSnapshot(manager, snapshot, config = null) {
+  if (!manager || !snapshot || typeof snapshot !== 'object') return false;
+  if (Array.isArray(snapshot.groups)) manager.groups = snapshot.groups;
+  if (Array.isArray(snapshot.employees)) manager.employees = snapshot.employees;
+
+  if (config && Array.isArray(snapshot.configStocks)) {
+    config.stocks = config.stocks || [];
+    for (const stock of snapshot.configStocks) {
+      if (stock?.id && !config.stocks.find((s) => s.id === stock.id)) {
+        config.stocks.push(stock);
+      }
+    }
+  }
+  return true;
+}
+
 export default BusinessGroupsManager;

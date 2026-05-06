@@ -61,13 +61,14 @@ import { buildStartupNewBusinessHtml } from './ui/startupUI.js';
 import { buildRealEstateNewBusinessHtml } from './ui/realEstateUI.js';
 import { loadRealEstateConfig, sampleProjectListSync, startRealEstateProject } from './core/realEstate.js';
 import { loadStartupConfig, generateBPsSync, startStartupInvestment } from './core/startupInvest.js';
-import BusinessGroupsManager from './core/businessGroups.js';
+import BusinessGroupsManager, { applyBusinessGroupsSnapshot, buildBusinessGroupsSnapshot } from './core/businessGroups.js';
 import { loadMacroConfig, getMacroConfigSync } from './core/macro.js';
 import { loadMarketConfig } from './core/marketCompetition.js';
 import { getStockBetaExtraBp, computeCycleBonusBp, computeRateEffectBp, computeLineSensitivityBp } from './core/settlement.js';
 import { businessNoiseH, noiseBpFromH, mixUint32, ymToMonthIndex } from './core/rng.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
+const BG_STORAGE_KEY = 'investment-sim:bg';
 
 function buildEndTurnConfig() {
   return {
@@ -83,11 +84,41 @@ function buildEndTurnConfig() {
           }
           alert(`以下业务组因人员为0已被自动裁撤：\n${dissolvedGroups.map((g) => g.name).join('\n')}`);
         }
+        saveBgToLocalStorage();
       } catch (e) {
         console.warn('businessGroups tickMonth failed', e);
       }
     },
   };
+}
+
+function loadBgFromLocalStorage() {
+  if (!bgManager) return false;
+  try {
+    const raw = localStorage.getItem(BG_STORAGE_KEY);
+    if (!raw) return false;
+    return applyBusinessGroupsSnapshot(bgManager, JSON.parse(raw), config);
+  } catch (e) {
+    console.warn('loadBgFromLocalStorage failed', e);
+    return false;
+  }
+}
+
+function saveBgToLocalStorage() {
+  if (!bgManager) return;
+  try {
+    localStorage.setItem(BG_STORAGE_KEY, JSON.stringify(buildBusinessGroupsSnapshot(bgManager, config)));
+  } catch (e) {
+    console.warn('saveBgToLocalStorage failed', e);
+  }
+}
+
+function clearBgLocalStorage() {
+  try {
+    localStorage.removeItem(BG_STORAGE_KEY);
+  } catch (e) {
+    console.warn('clearBgLocalStorage failed', e);
+  }
 }
 
 let config = null;
@@ -2114,6 +2145,7 @@ async function onAction(ev) {
     bgManager.createGroup(newGroup);
 
     selectedNewBusinessKind = null;
+    saveBgToLocalStorage();
     saveToLocal(state);
     render();
     return;
@@ -2234,6 +2266,7 @@ async function onAction(ev) {
       // 将 IPO 写入内存 config.stocks，方便导出为 JSON（注意：前端无法直接写回仓库文件）
       config.stocks = config.stocks || [];
       config.stocks.push(ipo);
+      saveBgToLocalStorage();
       saveToLocal(state);
       alert('已将 IPO 加入导出池。');
       console.log('Generated IPO object:', ipo);
@@ -2274,6 +2307,7 @@ async function onAction(ev) {
     if (!g.teamIds) g.teamIds = [];
     if (!g.teamIds.includes(empId)) {
       g.teamIds.push(empId);
+      saveBgToLocalStorage();
       render();
     }
     return;
@@ -2311,11 +2345,13 @@ async function onAction(ev) {
         bgManager.groups = bgManager.groups.filter((grp) => grp.id !== bid);
         selectedBgId = null;
         currentView = 'business-groups';
+        saveBgToLocalStorage();
         saveToLocal(state);
         render();
         alert(`业务组 ${g.name} 人员为0，已自动裁撤，剩余资金已返还。`);
         return;
       }
+      saveBgToLocalStorage();
       render();
     }
     return;
@@ -2342,6 +2378,7 @@ async function onAction(ev) {
     // 执行注资
     state.companyCashWan = (state.companyCashWan || 0) - amount;
     g.fundingWan = (g.fundingWan || 0) + amount;
+    saveBgToLocalStorage();
     saveToLocal(state);
     render();
     return;
@@ -2363,6 +2400,7 @@ async function onAction(ev) {
       return;
     }
     g.monthlySpend = { rdWan, expandWan, patentWan };
+    saveBgToLocalStorage();
     render();
     return;
   }
@@ -2376,6 +2414,7 @@ async function onAction(ev) {
     const res = bgManager.startResearch(g);
     if (!res.ok) return alert(res.error);
     appendLog(state, `【业务组·研发】${g.name} 开始研发新产品「${res.product.name}」，花费 ${res.cost} 万。`);
+    saveBgToLocalStorage();
     render();
     return;
   }
@@ -2393,6 +2432,7 @@ async function onAction(ev) {
     } else {
       appendLog(state, `【业务组·扩展】${g.name} 扩展业务，市占率提升 ${(res.gain * 100).toFixed(2)}%，花费 ${res.cost} 万。`);
     }
+    saveBgToLocalStorage();
     render();
     return;
   }
@@ -2444,6 +2484,7 @@ async function onAction(ev) {
     bgManager.groups = bgManager.groups.filter((grp) => grp.id !== bid);
     selectedBgId = null;
     currentView = 'business-groups';
+    saveBgToLocalStorage();
     saveToLocal(state);
     render();
     return;
@@ -2600,6 +2641,7 @@ async function onAction(ev) {
   }
   if (action === 'clear-save') {
     clearLocal();
+    clearBgLocalStorage();
     alert('已清除');
     return;
   }
@@ -2706,7 +2748,11 @@ async function bootstrap() {
       groupsUrl: `${base}/business-groups.json${cacheBuster}`,
       employeesUrl: `${base}/employees.json${cacheBuster}`,
     });
-    console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
+    if (loadBgFromLocalStorage()) {
+      console.log('BusinessGroupsManager data loaded from localStorage');
+    } else {
+      console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
+    }
   } catch (e) {
     console.warn('BusinessGroupsManager init failed', e);
   }
