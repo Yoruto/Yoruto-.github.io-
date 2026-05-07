@@ -13,7 +13,7 @@ export const NPC_INVESTORS = [
     displayName: '红杉资本(VC)',
     type: 'vc',
     description: '专注早期高成长企业的风险投资',
-    activeYears: [1990, 2020],
+    activeYears: [1990, 2025],
     triggerConditions: {
       minReputation: 60,
       minAssetWan: 500,
@@ -32,7 +32,7 @@ export const NPC_INVESTORS = [
     displayName: '橡树资本(PE)',
     type: 'pe',
     description: '专注成熟期企业的私募股权投资',
-    activeYears: [1995, 2020],
+    activeYears: [1995, 2025],
     triggerConditions: {
       minReputation: 70,
       minAssetWan: 1000,
@@ -51,7 +51,7 @@ export const NPC_INVESTORS = [
     displayName: '量子对冲基金',
     type: 'hedge',
     description: '高频交易驱动的对冲基金',
-    activeYears: [2000, 2020],
+    activeYears: [2000, 2025],
     triggerConditions: {
       minReputation: 50,
       minAssetWan: 300,

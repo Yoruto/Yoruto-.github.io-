@@ -33,6 +33,7 @@ import {
 } from './tables.js';
 import { buildMonthReportData } from './monthReport.js';
 import { buildAiStockPortfolio, REBALANCE_INTERVAL_MONTHS } from './employeeAI.js';
+import { applyStockSpotAndIndexAccumulators } from './stockPricing.js';
 import { checkPhaseTransition } from './phase.js';
 import {
   pushDueMajorEvents,
@@ -731,7 +732,7 @@ export function runSettlement(state, config) {
 }
 
 /** 月结后推进：离职/大事件 tick/小事件/翻月/月初扣款 */
-export function closeMonthAndAdvance(state) {
+export function closeMonthAndAdvance(state, gameConfig) {
   if (state.gameOver || state.victory) return;
 
   const closedY = state.year;
@@ -795,6 +796,14 @@ export function closeMonthAndAdvance(state) {
   });
   state.showMonthReport = true;
 
+  if (gameConfig) {
+    try {
+      applyStockSpotAndIndexAccumulators(state, gameConfig);
+    } catch (e) {
+      console.error('applyStockSpotAndIndexAccumulators', e);
+    }
+  }
+
   advanceCalendar(state);
   if (state.victory) {
     state.showMonthReport = false;
@@ -837,11 +846,11 @@ export function endTurn(state, config) {
     state.phase = 'margin';
     return { ok: true, needMargin: true };
   }
-  closeMonthAndAdvance(state);
+  closeMonthAndAdvance(state, config);
   return { ok: true };
 }
 
-export function resolveMargin(state, businessId, action, extraPayWan) {
+export function resolveMargin(state, businessId, action, extraPayWan, gameConfig) {
   const ix = state.pendingMargin.findIndex((m) => m.businessId === businessId);
   if (ix < 0) return { ok: false };
   const m = state.pendingMargin[ix];
@@ -869,7 +878,7 @@ export function resolveMargin(state, businessId, action, extraPayWan) {
   }
   state.pendingMargin.splice(ix, 1);
   if (!state.pendingMargin.length && !state.gameOver && !state.victory) {
-    closeMonthAndAdvance(state);
+    closeMonthAndAdvance(state, gameConfig);
   }
   return { ok: true };
 }
@@ -1075,10 +1084,10 @@ export function checkResignations(state) {
 }
 
 export function advanceCalendar(state) {
-  if (state.year === 2020 && state.month === 12) {
+  if (state.year === 2025 && state.month === 12) {
     state.victory = true;
     state.phase = 'victory';
-    appendLog(state, `【终局】2020 年 12 月已结算，最终现金 ${state.companyCashWan} 万。`);
+    appendLog(state, `【终局】2025 年 12 月已结算，最终现金 ${state.companyCashWan} 万。`);
     return;
   }
   if (state.month === 12) {
@@ -1102,11 +1111,6 @@ export function serializeState(state) {
 
 export function deserializeState(json) {
   const o = JSON.parse(json);
-  if ((o.schemaVersion | 0) === 6) {
-    o.schemaVersion = 7;
-    o.macro = o.macro ?? null;
-    o.market = o.market ?? null;
-  }
-  if (o.schemaVersion !== SCHEMA_VERSION) throw new Error('存档版本不兼容');
+  if (o.schemaVersion !== SCHEMA_VERSION) throw new Error('schema 不匹配');
   return o;
 }

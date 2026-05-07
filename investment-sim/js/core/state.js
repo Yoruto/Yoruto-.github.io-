@@ -2,8 +2,7 @@ import { OFFICE_GRADES, RECRUIT_COST_WAN, SEVERANCE_MONTHS_PAY } from './tables.
 import { randomEmployeeNameForSeed } from './rng.js';
 import { createDefaultCompanyEquity } from './companyEquity.js';
 
-/** 仅与当前开发构建一致；不兼容旧存档 */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** 万元精确到 0.0001（对应 1 元人民币） */
 export function roundWan(x) {
@@ -27,7 +26,7 @@ export function employeeMonthlySalaryWan(emp) {
 }
 
 export function recruitTierAllowed(year, tier) {
-  if (tier === 'junior') return year <= 2020;
+  if (tier === 'junior') return year <= 2025;
   if (tier === 'mid') return year >= 1996;
   if (tier === 'senior') return year >= 2006;
   return false;
@@ -64,7 +63,7 @@ export function createInitialState(gameSeed) {
     industryTech: { finance: 5, realestate: 5, tech: 5, semiconductor: 5, consumer: 5, medical: 5, energy: 5, aerospace: 5 },
     loyalty: 6,
     experienceMonths: 0,
-    hiredYearMonth: { year: 1990, month: 1 },
+    hiredYearMonth: { year: 1995, month: 1 },
     hiredThisMonth: false,
     trainingScheduled: false,
     idleStreakMonths: 0,
@@ -82,7 +81,7 @@ export function createInitialState(gameSeed) {
     industryTech: { finance: 5, realestate: 5, tech: 5, semiconductor: 5, consumer: 5, medical: 5, energy: 5, aerospace: 5 },
     loyalty: 7,
     experienceMonths: 0,
-    hiredYearMonth: { year: 1990, month: 1 },
+    hiredYearMonth: { year: 1995, month: 1 },
     hiredThisMonth: false,
     trainingScheduled: false,
     idleStreakMonths: 0,
@@ -94,7 +93,7 @@ export function createInitialState(gameSeed) {
     schemaVersion: SCHEMA_VERSION,
     idSeq: state0.idSeq,
     gameSeed: (gameSeed >>> 0) || 1,
-    year: 1990,
+    year: 1995,
     month: 1,
     phase: 'opening',
     // 公司发展阶段（startup | expansion | mature）——与 UI 的交互阶段 `phase` 区分
@@ -109,7 +108,7 @@ export function createInitialState(gameSeed) {
     companyCashWan: 80,
     reputation: 50,
     offices: [
-      { kind: 'lease', gradeId: 'small', sinceYear: 1990, sinceMonth: 1 },
+      { kind: 'lease', gradeId: 'small', sinceYear: 1995, sinceMonth: 1 },
     ],
     employees: [e1, e2],
     /** 持久在营业务；滚存=reinvest 时 aumWan 按月复利 */
@@ -152,6 +151,12 @@ export function createInitialState(gameSeed) {
     /** v0.6 宏观经济与市场竞争（由 macro.js / marketCompetition.js 填充） */
     macro: null,
     market: null,
+    /** 大盘综指：每年按 1 月成分与市值重算权重，年内不变 */
+    broadIndexWeights: null,
+    /** 股票前复权累计乘数（月结写入，不含当月） */
+    stockSpotMult: null,
+    /** 综指月末收盘点位（月结后更新）；展示当月瞬时点位 = 本值 × (1+本月综指涨跌幅) */
+    broadIndexLevel: 2000,
   };
 }
 

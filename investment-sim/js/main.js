@@ -5,7 +5,6 @@ import {
   createInitialState,
   getTotalCapacity,
   canPromote,
-  SCHEMA_VERSION,
   recruitCostForTier,
   employeeCanDeploy,
   hasActiveBusiness,
@@ -19,7 +18,6 @@ import {
   B_FUT_BP_BY_C,
   INDUSTRIES,
   PHASE_UNLOCKS,
-  NOISE_BP,
 } from './core/tables.js';
 import { runRefreshTalentPool, runHireFromTalent, TALENT_REFRESH_COST_WAN } from './core/talentPool.js';
 import {
@@ -53,7 +51,7 @@ import {
   sellOwnCompanyShares,
 } from './core/companyEquity.js';
 import { acceptNpcInvestment, rejectNpcInvestment } from './core/npcInvestors.js';
-import { saveToLocal, loadFromLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
+import { saveToLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
 import { initGM } from './core/gm.js';
 import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
 import { initOtherCompaniesUI } from './ui/otherCompaniesUI.js';
@@ -62,10 +60,14 @@ import { buildRealEstateNewBusinessHtml } from './ui/realEstateUI.js';
 import { loadRealEstateConfig, sampleProjectListSync, startRealEstateProject } from './core/realEstate.js';
 import { loadStartupConfig, generateBPsSync, startStartupInvestment } from './core/startupInvest.js';
 import BusinessGroupsManager, { applyBusinessGroupsSnapshot, buildBusinessGroupsSnapshot } from './core/businessGroups.js';
-import { loadMacroConfig, getMacroConfigSync } from './core/macro.js';
+import { loadMacroConfig } from './core/macro.js';
 import { loadMarketConfig } from './core/marketCompetition.js';
-import { getStockBetaExtraBp, computeCycleBonusBp, computeRateEffectBp, computeLineSensitivityBp } from './core/settlement.js';
-import { businessNoiseH, noiseBpFromH, mixUint32, ymToMonthIndex } from './core/rng.js';
+import {
+  getStockFactorParts,
+  computeSpotDisplayPrice,
+  computeBroadMarketIndexReturnForUI,
+} from './core/stockPricing.js';
+import { listedStocksForMonth } from './core/employeeAI.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const BG_STORAGE_KEY = 'investment-sim:bg';
@@ -151,27 +153,27 @@ const EMBEDDED_CONFIG = {
     { "id": "agri", "name": "农业与食品原料", "nameEn": "Agriculture", "sectorBetaBp": 50 }
   ],
   "stocks": [
-    { "id": "STK0001", "name": "城信城市商业银行", "shortName": "城信", "sectorId": "fin", "listingYearMonth": "1992-05", "basePrice": 45.50, "matureYear": 1992, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true },
-    { "id": "STK0002", "name": "华安联合证券", "shortName": "华安", "sectorId": "fin", "listingYearMonth": "1994-11", "basePrice": 128.00, "matureYear": 1999, "matureBetaExtraBp": 400, "dividendRateAnnual": 0.02, "isFictional": true },
-    { "id": "STK0003", "name": "东岸置地发展", "shortName": "东岸", "sectorId": "re", "listingYearMonth": "1993-02", "basePrice": 85.20, "matureYear": 1993, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.028, "isFictional": true },
-    { "id": "STK0004", "name": "宏基路桥建设", "shortName": "宏基", "sectorId": "re", "listingYearMonth": "1995-08", "basePrice": 32.80, "matureYear": 2003, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.022, "isFictional": true },
-    { "id": "STK0005", "name": "金穗食品加工", "shortName": "金穗", "sectorId": "cons", "listingYearMonth": "1991-09", "basePrice": 156.50, "matureYear": 1991, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.032, "isFictional": true },
-    { "id": "STK0006", "name": "乐购连锁零售", "shortName": "乐购", "sectorId": "cons", "listingYearMonth": "1996-04", "basePrice": 78.30, "matureYear": 2001, "matureBetaExtraBp": -100, "dividendRateAnnual": 0.03, "isFictional": true },
-    { "id": "STK0007", "name": "东方微电子", "shortName": "东微", "sectorId": "tech", "listingYearMonth": "1997-12", "basePrice": 268.80, "matureYear": 2007, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.015, "isFictional": true },
-    { "id": "STK0008", "name": "云联光通信", "shortName": "云联", "sectorId": "tech", "listingYearMonth": "2000-03", "basePrice": 198.00, "matureYear": 2003, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.012, "isFictional": true },
-    { "id": "STK0009", "name": "康宁联合制药", "shortName": "康宁", "sectorId": "health", "listingYearMonth": "1993-07", "basePrice": 112.50, "matureYear": 1993, "matureBetaExtraBp": 50, "dividendRateAnnual": 0.018, "isFictional": true },
-    { "id": "STK0010", "name": "同和医疗集团", "shortName": "同和", "sectorId": "health", "listingYearMonth": "1998-06", "basePrice": 67.20, "matureYear": 2003, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.02, "isFictional": true },
-    { "id": "STK0011", "name": "重联重工机械", "shortName": "重联", "sectorId": "ind", "listingYearMonth": "1990-10", "basePrice": 45.80, "matureYear": 1990, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.025, "isFictional": true },
-    { "id": "STK0012", "name": "精密切削工具", "shortName": "精密切削", "sectorId": "ind", "listingYearMonth": "1994-01", "basePrice": 89.60, "matureYear": 2002, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.022, "isFictional": true },
-    { "id": "STK0013", "name": "长岭石化", "shortName": "长岭", "sectorId": "ene", "listingYearMonth": "1991-04", "basePrice": 145.00, "matureYear": 1991, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.04, "isFictional": true },
-    { "id": "STK0014", "name": "西北矿业", "shortName": "西矿", "sectorId": "ene", "listingYearMonth": "1996-09", "basePrice": 58.40, "matureYear": 2002, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true },
-    { "id": "STK0015", "name": "远洋航运", "shortName": "远洋", "sectorId": "trans", "listingYearMonth": "1992-12", "basePrice": 34.50, "matureYear": 1992, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.03, "isFictional": true },
-    { "id": "STK0016", "name": "顺达综合物流", "shortName": "顺达", "sectorId": "trans", "listingYearMonth": "1999-11", "basePrice": 76.80, "matureYear": 2004, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.028, "isFictional": true },
-    { "id": "STK0017", "name": "绿源城市水务", "shortName": "绿源", "sectorId": "util", "listingYearMonth": "1993-05", "basePrice": 298.00, "matureYear": 1993, "matureBetaExtraBp": -300, "dividendRateAnnual": 0.045, "isFictional": true },
-    { "id": "STK0018", "name": "净能环保", "shortName": "净能", "sectorId": "util", "listingYearMonth": "2002-08", "basePrice": 15.60, "matureYear": 2010, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.02, "isFictional": true },
-    { "id": "STK0019", "name": "丰禾种业", "shortName": "丰禾", "sectorId": "agri", "listingYearMonth": "1990-08", "basePrice": 52.30, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.025, "isFictional": true },
-    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "1994-02", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true },
-    { "id": "STK0021", "name": "玩家公司(未上市不显示)", "shortName": "自司", "sectorId": "fin", "listingYearMonth": "1990-01", "basePrice": 1, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0, "isFictional": true, "isPlayerCompany": true }
+    { "id": "STK0001", "name": "城信城市商业银行", "shortName": "城信", "sectorId": "fin", "listingYearMonth": "1995-01", "basePrice": 45.50, "matureYear": 1992, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true },
+    { "id": "STK0002", "name": "华安联合证券", "shortName": "华安", "sectorId": "fin", "listingYearMonth": "1996-06", "basePrice": 128.00, "matureYear": 1999, "matureBetaExtraBp": 400, "dividendRateAnnual": 0.02, "isFictional": true },
+    { "id": "STK0003", "name": "东岸置地发展", "shortName": "东岸", "sectorId": "re", "listingYearMonth": "1995-01", "basePrice": 85.20, "matureYear": 1993, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.028, "isFictional": true },
+    { "id": "STK0004", "name": "宏基路桥建设", "shortName": "宏基", "sectorId": "re", "listingYearMonth": "1998-06", "basePrice": 32.80, "matureYear": 2003, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.022, "isFictional": true },
+    { "id": "STK0005", "name": "金穗食品加工", "shortName": "金穗", "sectorId": "cons", "listingYearMonth": "1995-01", "basePrice": 156.50, "matureYear": 1991, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.032, "isFictional": true },
+    { "id": "STK0006", "name": "乐购连锁零售", "shortName": "乐购", "sectorId": "cons", "listingYearMonth": "2000-06", "basePrice": 78.30, "matureYear": 2001, "matureBetaExtraBp": -100, "dividendRateAnnual": 0.03, "isFictional": true },
+    { "id": "STK0007", "name": "东方微电子", "shortName": "东微", "sectorId": "tech", "listingYearMonth": "2002-06", "basePrice": 268.80, "matureYear": 2007, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.015, "isFictional": true },
+    { "id": "STK0008", "name": "云联光通信", "shortName": "云联", "sectorId": "tech", "listingYearMonth": "2004-06", "basePrice": 198.00, "matureYear": 2003, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.012, "isFictional": true },
+    { "id": "STK0009", "name": "康宁联合制药", "shortName": "康宁", "sectorId": "health", "listingYearMonth": "1995-01", "basePrice": 112.50, "matureYear": 1993, "matureBetaExtraBp": 50, "dividendRateAnnual": 0.018, "isFictional": true },
+    { "id": "STK0010", "name": "同和医疗集团", "shortName": "同和", "sectorId": "health", "listingYearMonth": "2006-06", "basePrice": 67.20, "matureYear": 2003, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.02, "isFictional": true },
+    { "id": "STK0011", "name": "重联重工机械", "shortName": "重联", "sectorId": "ind", "listingYearMonth": "1995-01", "basePrice": 45.80, "matureYear": 1990, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.025, "isFictional": true },
+    { "id": "STK0012", "name": "精密切削工具", "shortName": "精密切削", "sectorId": "ind", "listingYearMonth": "2008-06", "basePrice": 89.60, "matureYear": 2002, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.022, "isFictional": true },
+    { "id": "STK0013", "name": "长岭石化", "shortName": "长岭", "sectorId": "ene", "listingYearMonth": "1995-01", "basePrice": 145.00, "matureYear": 1991, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.04, "isFictional": true },
+    { "id": "STK0014", "name": "西北矿业", "shortName": "西矿", "sectorId": "ene", "listingYearMonth": "2010-06", "basePrice": 58.40, "matureYear": 2002, "matureBetaExtraBp": 200, "dividendRateAnnual": 0.035, "isFictional": true },
+    { "id": "STK0015", "name": "远洋航运", "shortName": "远洋", "sectorId": "trans", "listingYearMonth": "1995-01", "basePrice": 34.50, "matureYear": 1992, "matureBetaExtraBp": 300, "dividendRateAnnual": 0.03, "isFictional": true },
+    { "id": "STK0016", "name": "顺达综合物流", "shortName": "顺达", "sectorId": "trans", "listingYearMonth": "2012-06", "basePrice": 76.80, "matureYear": 2004, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.028, "isFictional": true },
+    { "id": "STK0017", "name": "绿源城市水务", "shortName": "绿源", "sectorId": "util", "listingYearMonth": "1995-01", "basePrice": 298.00, "matureYear": 1993, "matureBetaExtraBp": -300, "dividendRateAnnual": 0.045, "isFictional": true },
+    { "id": "STK0018", "name": "净能环保", "shortName": "净能", "sectorId": "util", "listingYearMonth": "2014-06", "basePrice": 15.60, "matureYear": 2010, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.02, "isFictional": true },
+    { "id": "STK0019", "name": "丰禾种业", "shortName": "丰禾", "sectorId": "agri", "listingYearMonth": "2017-06", "basePrice": 52.30, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0.025, "isFictional": true },
+    { "id": "STK0020", "name": "原香粮油", "shortName": "原香", "sectorId": "agri", "listingYearMonth": "2020-06", "basePrice": 38.90, "matureYear": 1999, "matureBetaExtraBp": 100, "dividendRateAnnual": 0.03, "isFictional": true },
+    { "id": "STK0021", "name": "玩家公司(未上市不显示)", "shortName": "自司", "sectorId": "fin", "listingYearMonth": "2099-12", "basePrice": 1, "matureYear": 1990, "matureBetaExtraBp": 0, "dividendRateAnnual": 0, "isFictional": true, "isPlayerCompany": true }
   ],
   "futures": {
     "defaultVariantId": "composite",
@@ -513,83 +515,35 @@ function formatIndustryTech(emp) {
 
 // ========== C区域视图渲染函数 ==========
 
-// 计算波动率乘数（极端情绪时放大波动）
-function computeVolatilityMultiplier(sentiment) {
-  const m = Number(sentiment) || 50;
-  if (m > 85 || m < 15) return 1.4;
-  if (m > 70 || m < 30) return 1.2;
-  return 1.0;
-}
-
-// 根据宏观行情计算股票实际涨跌幅（与实际结算保持一致）
-// 获取股票的完整影响因子（单位：万分比）
 function getStockFactors(stock, cMacro, orderIndex = 0) {
-  const sec = config.sectors?.find((x) => x.id === stock.sectorId);
-  const mcfg = getMacroConfigSync();
-  const macro = state?.macro;
-  const lines = macro?.lines || {};
-  const phase = macro?.cyclePhase;
-  const sentiment = macro?.sentiment ?? 50;
-  const baseRate = macro?.baseRate ?? 6;
-  const monthIndex = ymToMonthIndex(state.year, state.month);
-
-  // 1. 大环境因子（股市综合线）
-  const c = Math.max(0, Math.min(4, cMacro | 0));
-  const macroFactor = B_STOCK_BP_BY_C[c] || 0;
-
-  // 2. 行业因子（固定beta）
-  const sectorFactor = sec?.sectorBetaBp || 0;
-
-  // 3. 个股因子（与实际结算一致：成长期用随机，成熟期用配置值）
-  const stockFactor = getStockBetaExtraBp(stock, state.year, state.gameSeed, monthIndex);
-
-  // 4. 宏观联动因子（周期、利率、敏感度）
-  let macroExtraBp = 0;
-  let cycleBp = 0;
-  let rateBp = 0;
-  let lineBp = 0;
-  if (sec) {
-    cycleBp = computeCycleBonusBp(sec, phase, mcfg);
-    rateBp = computeRateEffectBp(sec, baseRate, mcfg?.neutralBaseRatePercent ?? 6);
-    lineBp = computeLineSensitivityBp(sec, lines, mcfg);
-    const stockMacroBp = stock.macroBetaBp || 0;
-    macroExtraBp = cycleBp + rateBp + lineBp + stockMacroBp;
-  }
-
-  // 5. 噪声因子（与实际结算一致：使用 businessNoiseH 生成确定性噪声）
-  const H = businessNoiseH(state.gameSeed, monthIndex, orderIndex, 'stock');
-  const volMult = computeVolatilityMultiplier(sentiment);
-  const baseNoise = noiseBpFromH(H, NOISE_BP);
-  const noiseFactor = Math.round(baseNoise * 3.2 * volMult);
-
+  const r = getStockFactorParts(state, config, stock, cMacro, orderIndex);
   return {
-    macroFactor,
-    sectorFactor,
-    stockFactor,
-    macroExtraBp,
-    noiseFactor,
-    cycleBp,
-    rateBp,
-    lineBp,
-    stockMacroBp: stock.macroBetaBp || 0,
-    isMature: state.year >= (stock.matureYear || 2100)
+    macroFactor: r.macroFactor,
+    sectorFactor: r.sectorFactor,
+    stockFactor: r.stockFactor,
+    macroExtraBp: r.macroExtraBp,
+    noiseFactor: r.noiseFactor,
+    cycleBp: r.cycleBp,
+    rateBp: r.rateBp,
+    lineBp: r.lineBp,
+    stockMacroBp: r.stockMacroBp,
+    isMature: r.isMature,
   };
 }
 
-// 计算股票总收益率（与实际结算保持一致）
-function calculateStockReturn(stock, cMacro) {
-  const { macroFactor, sectorFactor, stockFactor, macroExtraBp, noiseFactor } = getStockFactors(stock, cMacro);
-  // 总收益 = 大环境 + 行业 + 个股 + 宏观联动 + 噪声
-  const totalReturnBp = macroFactor + sectorFactor + stockFactor + macroExtraBp + noiseFactor;
-  return (totalReturnBp / 100).toFixed(2);
+function calculateStockReturn(stock, cMacro, orderIndex = 0) {
+  const bp = getStockFactorParts(state, config, stock, cMacro, orderIndex).totalReturnBp;
+  return (bp / 100).toFixed(2);
 }
 
-// 计算股价（基于basePrice配置）
-function calculateStockPrice(stock, cMacro) {
-  const basePrice = stock.basePrice || 100;
-  const totalReturnBp = Number(calculateStockReturn(stock, cMacro)) * 100;
-  const price = basePrice * (1 + totalReturnBp / 10000);
-  return price.toFixed(2);
+/** 本月展示价 = base × 上月末复权乘数 × (1+本月涨跌幅)，与月结复利一致 */
+function calculateStockPrice(stock, cMacro, orderIndex = 0) {
+  return computeSpotDisplayPrice(state, config, stock, cMacro, orderIndex).toFixed(2);
+}
+
+function formatIndexWeightPercentDisplay(w) {
+  if (w == null || !Number.isFinite(Number(w))) return '—';
+  return `${(Number(w) * 100).toFixed(2)}%`;
 }
 
 // 1. 市场行情视图
@@ -600,20 +554,28 @@ function renderMarketView() {
   const sentiment = macro?.sentiment ?? 50;
   const phase = macro?.cyclePhase || '—';
   const baseRate = macro?.baseRate ?? 6;
+  const listedRows = listedStocksForMonth(config.stocks || [], state.year, state.month);
+  const { indexReturnPct: indexReturnStr, weightsById, indexCount } = computeBroadMarketIndexReturnForUI(state, config, cMacro);
+  const indexRetNum = Number(indexReturnStr);
+  const indexRetClass = indexRetNum > 0 ? 'up' : indexRetNum < 0 ? 'down' : 'neutral';
+  const indexBase = state.broadIndexLevel != null && Number.isFinite(state.broadIndexLevel) ? state.broadIndexLevel : 2000;
+  const indexPoints = indexBase * (1 + indexRetNum / 100);
+  const indexPointsStr = indexPoints.toFixed(2);
   return `
     <div class="view-section">
-      <h2 class="section-title">股票市场（均可配置进组合）</h2>
+      <h2 class="section-title">股票市场（均已上市可交易）</h2>
       <p class="hint">本月宏观行情：股市 ${sentimentText(state.actualEquityC)} · 大环境因子 ${macroReturn}% · 情绪指数 ${sentiment}/100 · 周期阶段 ${phase} · 基准利率 ${baseRate}%</p>
+      <p class="hint">大盘综指（基期 2000 点，月结复利；每年 1 月按市值重算权重，年内固定；不含玩家自司）：<strong>${indexPointsStr}</strong> 点 · 本月 <span class="return-${indexRetClass}" style="font-weight:700">${indexRetNum > 0 ? '▲' : indexRetNum < 0 ? '▼' : '—'} ${indexReturnStr}%</span> · 本年成分 <strong>${indexCount}</strong> 家 · 行情表共 <strong>${listedRows.length}</strong> 支（含自司）</p>
       <table class="data-table">
-        <thead><tr><th>代码</th><th>简称</th><th>行业</th><th>股价</th><th>本月涨跌</th><th>涨跌分解</th></tr></thead>
+        <thead><tr><th>代码</th><th>简称</th><th>行业</th><th>股价</th><th>本月涨跌</th><th>综指权重</th><th>涨跌分解</th></tr></thead>
         <tbody>
-          ${config.stocks
-            .map((s) => {
-              const sec = config.sectors?.find((x) => x.id === s.sectorId);
-              const isMature = state.year >= (s.matureYear || 2100);
-              const price = calculateStockPrice(s, cMacro);
-              const returnPct = calculateStockReturn(s, cMacro);
-              const { macroFactor, sectorFactor, stockFactor, macroExtraBp, noiseFactor, cycleBp, rateBp, lineBp, stockMacroBp } = getStockFactors(s, cMacro);
+          ${listedRows
+            .map((stk, idx) => {
+              const sec = config.sectors?.find((x) => x.id === stk.sectorId);
+              const isMature = state.year >= (stk.matureYear || 2100);
+              const price = calculateStockPrice(stk, cMacro, idx);
+              const returnPct = calculateStockReturn(stk, cMacro, idx);
+              const { macroFactor, sectorFactor, stockFactor, macroExtraBp, noiseFactor, cycleBp, rateBp, lineBp, stockMacroBp } = getStockFactors(stk, cMacro, idx);
               const returnClass = Number(returnPct) > 0 ? 'up' : Number(returnPct) < 0 ? 'down' : 'neutral';
               const returnIcon = Number(returnPct) > 0 ? '▲' : Number(returnPct) < 0 ? '▼' : '—';
               // 构建详细的涨跌分解
@@ -627,12 +589,16 @@ function renderMarketView() {
               if (stockMacroBp !== 0) breakdownParts.push(`宏观β${(stockMacroBp/100).toFixed(1)}%`);
               if (noiseFactor !== 0) breakdownParts.push(`噪声${(noiseFactor/100).toFixed(1)}%`);
               const breakdownText = breakdownParts.length > 0 ? breakdownParts.join(' + ') : '无波动';
+              const w = weightsById.get(stk.id);
+              const wText =
+                stk.isPlayerCompany ? '—' : w != null ? formatIndexWeightPercentDisplay(w) : '—';
               return `<tr>
-                <td>${s.id}</td>
-                <td>${s.shortName}</td>
-                <td>${sec?.name || s.sectorId}</td>
+                <td>${stk.id}</td>
+                <td>${stk.shortName}</td>
+                <td>${sec?.name || stk.sectorId}</td>
                 <td>${price}</td>
                 <td class="return-${returnClass}">${returnIcon} ${returnPct}%</td>
+                <td style="font-size:0.78rem;color:#e9c891;">${wText}</td>
                 <td style="font-size:0.7rem;color:#ac9e7e;">${breakdownText}</td>
               </tr>`;
             })
@@ -2602,7 +2568,7 @@ async function onAction(ev) {
   }
   if (action === 'margin-topup') {
     const id = ev.currentTarget.getAttribute('data-id');
-    const r = resolveMargin(state, id, 'topup', Number($(`#pay-${id}`)?.value));
+    const r = resolveMargin(state, id, 'topup', Number($(`#pay-${id}`)?.value), config);
     if (!r.ok) alert(r.error || '失败');
     saveToLocal(state);
     render();
@@ -2610,7 +2576,7 @@ async function onAction(ev) {
   }
   if (action === 'margin-kill') {
     const id = ev.currentTarget.getAttribute('data-id');
-    const r = resolveMargin(state, id, 'liquidate');
+    const r = resolveMargin(state, id, 'liquidate', undefined, config);
     if (!r.ok) alert(r.error || '失败');
     saveToLocal(state);
     render();
@@ -2629,9 +2595,7 @@ async function onAction(ev) {
     const t = window.prompt('粘贴 JSON');
     if (!t) return;
     try {
-      const o = importJson(t);
-      if (o.schemaVersion !== SCHEMA_VERSION) throw new Error(`须为 schema ${SCHEMA_VERSION}`);
-      state = o;
+      state = importJson(t);
       saveToLocal(state);
       render();
     } catch (e) {
@@ -2706,13 +2670,6 @@ async function bootstrap() {
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-assigned',message:'config object assigned',data:{configIsNull:config===null,hasStocks:!!config?.stocks,hasFutures:!!config?.futures},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
-  // [调试模式] 每次新开网页都是新游戏，屏蔽存档功能
-  // 如需恢复存档，取消下面注释并注释掉 state = createInitialState(1);
-  // state = loadFromLocal();
-  // if (!state || state.schemaVersion !== SCHEMA_VERSION) {
-  //   state = createInitialState(1);
-  //   saveToLocal(state);
-  // }
   state = createInitialState(1);
 
   // #region agent log - Hypothesis C: State created
