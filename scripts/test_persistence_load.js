@@ -63,5 +63,9 @@ assert(
   mainSource.includes('state = loadFromLocal();'),
   'bootstrap should load the saved state before falling back to a new game',
 );
+assert(
+  /import\s+\{[\s\S]*SCHEMA_VERSION[\s\S]*\}\s+from\s+'\.\/core\/state\.js';/.test(mainSource),
+  'bootstrap schema guard should import SCHEMA_VERSION from state.js',
+);
 
 console.log('persistence load regression test passed');

@@ -3,6 +3,7 @@
  */
 import {
   createInitialState,
+  SCHEMA_VERSION,
   getTotalCapacity,
   canPromote,
   recruitCostForTier,
