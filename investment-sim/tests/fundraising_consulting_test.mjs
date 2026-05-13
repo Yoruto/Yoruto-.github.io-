@@ -1,20 +1,9 @@
-import fs from 'fs';
-import path from 'path';
 import assert from 'assert';
-import { pathToFileURL } from 'url';
-
-const root = path.resolve('d:/Yoruto-.github.io-/investment-sim/js');
-function loadModule(rel) {
-  const full = path.join(root, rel);
-  return import(pathToFileURL(full).href);
-}
+import * as stateMod from '../js/core/state.js';
+import * as me from '../js/core/monthEngine.js';
+import * as persistence from '../js/core/persistence.js';
 
 async function run() {
-  const stateMod = await loadModule('./core/state.js');
-  const me = await loadModule('./core/monthEngine.js');
-  const persistence = await loadModule('./core/persistence.js');
-  const settlement = await loadModule('./core/settlement.js');
-
   // create a fresh state
   const state = stateMod.createInitialState ? stateMod.createInitialState(42) : stateMod.createInitialState?.(1) || JSON.parse(JSON.stringify(stateMod.DEFAULT_STATE || {}));
   // ensure we have at least one employee
