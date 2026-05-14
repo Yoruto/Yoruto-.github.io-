@@ -172,6 +172,11 @@ export function computeBroadMarketIndexReturnForUI(state, cfg, cMacro) {
  */
 export function applyStockSpotAndIndexAccumulators(state, config) {
   if (!state.stockSpotMult) state.stockSpotMult = Object.create(null);
+  if (state.broadIndexLevel == null || !Number.isFinite(state.broadIndexLevel)) {
+    state.broadIndexLevel = 2000;
+  }
+  const idxPct = computeBroadIndexMonthlyReturnPct(state, config, state.actualEquityC);
+
   const stocks = [...(config.stocks || [])]
     .filter((s) => !s.isPlayerCompany)
     .sort((a, b) => a.id.localeCompare(b.id));
@@ -184,9 +189,5 @@ export function applyStockSpotAndIndexAccumulators(state, config) {
     state.stockSpotMult[stock.id] = (prev != null ? prev : 1) * (1 + bp / 10000);
   }
 
-  if (state.broadIndexLevel == null || !Number.isFinite(state.broadIndexLevel)) {
-    state.broadIndexLevel = 2000;
-  }
-  const idxPct = computeBroadIndexMonthlyReturnPct(state, config, state.actualEquityC);
   state.broadIndexLevel *= (1 + idxPct / 100);
 }
