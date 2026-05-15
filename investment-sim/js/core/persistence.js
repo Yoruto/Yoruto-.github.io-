@@ -1,3 +1,5 @@
+import { SCHEMA_VERSION } from './state.js';
+
 const STORAGE_KEY = 'investment-sim-dev-v5';
 
 const LEGACY_STORAGE_KEYS = ['investment-company-v2-save', 'investment-sim-dev-save'];
@@ -10,6 +12,25 @@ function purgeLegacyKeys() {
       /* ignore */
     }
   }
+}
+
+export function migrateSavedState(state) {
+  if (!state || typeof state !== 'object') return null;
+  const version = state.schemaVersion | 0;
+  if (version === SCHEMA_VERSION) return state;
+  if (version === 7 && SCHEMA_VERSION === 8) {
+    return {
+      ...state,
+      schemaVersion: SCHEMA_VERSION,
+      broadIndexWeights: state.broadIndexWeights ?? null,
+      stockSpotMult: state.stockSpotMult ?? null,
+      broadIndexLevel:
+        state.broadIndexLevel != null && Number.isFinite(Number(state.broadIndexLevel))
+          ? Number(state.broadIndexLevel)
+          : 2000,
+    };
+  }
+  return null;
 }
 
 export function saveToLocal(state) {
@@ -26,7 +47,7 @@ export function loadFromLocal() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
-    return JSON.parse(raw);
+    return migrateSavedState(JSON.parse(raw));
   } catch {
     return null;
   }
@@ -46,5 +67,7 @@ export function exportJson(state) {
 }
 
 export function importJson(text) {
-  return JSON.parse(text);
+  const state = migrateSavedState(JSON.parse(text));
+  if (!state) throw new Error(`须为 schema ${SCHEMA_VERSION}`);
+  return state;
 }
