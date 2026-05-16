@@ -51,7 +51,7 @@ import {
   sellOwnCompanyShares,
 } from './core/companyEquity.js';
 import { acceptNpcInvestment, rejectNpcInvestment } from './core/npcInvestors.js';
-import { saveToLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
+import { saveToLocal, loadFromLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
 import { initGM } from './core/gm.js';
 import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
 import { initOtherCompaniesUI } from './ui/otherCompaniesUI.js';
@@ -2670,7 +2670,7 @@ async function bootstrap() {
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-assigned',message:'config object assigned',data:{configIsNull:config===null,hasStocks:!!config?.stocks,hasFutures:!!config?.futures},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
-  state = createInitialState(1);
+  state = loadFromLocal() || createInitialState(1);
 
   // #region agent log - Hypothesis C: State created
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:state-created',message:'initial state created',data:{stateIsNull:state===null,phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month},timestamp:Date.now()})}).catch(()=>{});
