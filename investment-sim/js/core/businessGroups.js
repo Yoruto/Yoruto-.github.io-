@@ -19,11 +19,58 @@ const INDUSTRY_PROJECT_NAMES = {
   aerospace: ['商业火箭', '卫星通信', '导航服务', '遥感卫星', '载人飞船', '太空旅游', '空间站', '小行星采矿', '电动飞机', '物流无人机', '飞行汽车', '超音速客机', '智能座舱', '车芯', '车联网', '新能源汽车', '动力电池', '电机控制', '轻量化材料', '智能驾驶'],
 };
 
+const BUSINESS_GROUP_INDUSTRY_TO_STOCK_SECTOR = {
+  finance: 'fin',
+  realestate: 're',
+  tech: 'tech',
+  semiconductor: 'tech',
+  consumer: 'cons',
+  medical: 'health',
+  energy: 'ene',
+  aerospace: 'tech',
+};
+
 /** 根据行业随机获取一个产品名 */
 function getRandomProductName(industry, seed = Date.now()) {
   const names = INDUSTRY_PROJECT_NAMES[industry] || INDUSTRY_PROJECT_NAMES.tech;
   const idx = (seed + names.length) % names.length;
   return names[idx];
+}
+
+function businessGroupStockId(group) {
+  return `STKBG-${String(group?.id || Date.now()).replace(/[^0-9A-Za-z]/g, '')}`;
+}
+
+function sectorIdForBusinessGroupIndustry(industry) {
+  return BUSINESS_GROUP_INDUSTRY_TO_STOCK_SECTOR[industry] || 'tech';
+}
+
+function stockShortName(name, fallback) {
+  const source = String(name || fallback || '业务组');
+  return Array.from(source).slice(0, 4).join('');
+}
+
+function normalizeBusinessGroupStock(stock) {
+  if (!stock || typeof stock !== 'object') return null;
+  if (stock.id) return stock;
+  if (!stock.stockId) return stock;
+  const listingYear = Number(stock.listingYear) || new Date().getFullYear();
+  const listingMonth = Number(stock.listingMonth) || 1;
+  const listingYearMonth = stock.listingYearMonth || `${listingYear}-${String(listingMonth).padStart(2, '0')}`;
+  const basePrice = Number(stock.basePrice ?? stock.initialPrice);
+  return {
+    ...stock,
+    id: stock.stockId,
+    shortName: stock.shortName || stock.symbol || stockShortName(stock.name, stock.stockId),
+    sectorId: stock.sectorId || sectorIdForBusinessGroupIndustry(stock.industry),
+    listingYearMonth,
+    basePrice: Number.isFinite(basePrice) && basePrice > 0 ? basePrice : 1,
+    matureYear: Number(stock.matureYear) || listingYear + 5,
+    matureBetaExtraBp: Number(stock.matureBetaExtraBp) || 300,
+    dividendRateAnnual: Number(stock.dividendRateAnnual) || 0,
+    isFictional: stock.isFictional ?? true,
+    isBusinessGroupIpo: stock.isBusinessGroupIpo ?? true,
+  };
 }
 
 export class BusinessGroupsManager {
@@ -247,19 +294,34 @@ export class BusinessGroupsManager {
   }
 
   // 生成 IPO 对象
-  generateIPOObject(group){
+  generateIPOObject(group, listing = null){
     const totalSharesWan = 10000;
     const initialPrice = (group.metrics.valuationWan || 0) / totalSharesWan;
+    const id = businessGroupStockId(group);
+    const listingYear = Number(listing?.year) || new Date().getFullYear();
+    const listingMonth = Number(listing?.month) || (new Date().getMonth() + 1);
+    const roundedInitialPrice = Math.max(0.01, Number(initialPrice.toFixed(2)));
     const stock = {
-      stockId: `STKBG-${group.id.replace(/[^0-9A-Za-z]/g,'')}`,
+      id,
+      stockId: id,
       companyId: group.id,
       name: `${group.name} 股份有限公司`,
+      shortName: stockShortName(group.name, group.id),
       symbol: group.id.replace(/BG-/,'BG'),
+      sectorId: sectorIdForBusinessGroupIndustry(group.industry),
       totalSharesWan,
       freeFloatSharesWan: Math.round(totalSharesWan/2),
-      initialPrice: Math.max(0.01, Number(initialPrice.toFixed(2))),
-      listingYear: new Date().getFullYear(),
+      initialPrice: roundedInitialPrice,
+      basePrice: roundedInitialPrice,
+      listingYear,
+      listingMonth,
+      listingYearMonth: `${listingYear}-${String(listingMonth).padStart(2, '0')}`,
       industry: group.industry,
+      matureYear: listingYear + 5,
+      matureBetaExtraBp: 300,
+      dividendRateAnnual: 0,
+      isFictional: true,
+      isBusinessGroupIpo: true,
       playerHoldingsWan: { [group.ownerPlayerId || 'PLAYER-UNKNOWN']: Math.round((totalSharesWan/2)) }
     };
     return stock;
@@ -330,7 +392,7 @@ export function buildBusinessGroupsSnapshot(manager, config = null) {
   return {
     groups: manager?.groups || [],
     employees: manager?.employees || [],
-    configStocks: config?.stocks || [],
+    configStocks: (config?.stocks || []).map(normalizeBusinessGroupStock).filter(Boolean),
     savedAt: Date.now(),
   };
 }
@@ -342,7 +404,8 @@ export function applyBusinessGroupsSnapshot(manager, snapshot, config = null) {
 
   if (config && Array.isArray(snapshot.configStocks)) {
     config.stocks = config.stocks || [];
-    for (const stock of snapshot.configStocks) {
+    for (const rawStock of snapshot.configStocks) {
+      const stock = normalizeBusinessGroupStock(rawStock);
       if (stock?.id && !config.stocks.find((s) => s.id === stock.id)) {
         config.stocks.push(stock);
       }
