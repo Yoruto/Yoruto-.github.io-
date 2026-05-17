@@ -26,6 +26,7 @@ const config = {
   stocks: [{ id: 'STK-BASE', name: 'Base', sectorId: 'tech', basePrice: 10, matureYear: 1990 }],
 };
 const ipoStock = source.generateIPOObject(source.groups[0], { year: 2001, month: 6 });
+const expectedIpoId = ipoStock.id;
 const snapshot = buildBusinessGroupsSnapshot(source, { stocks: [...config.stocks, ipoStock] });
 
 const restored = new BusinessGroupsManager();
@@ -35,9 +36,9 @@ if (!ok) throw new Error('snapshot restore failed');
 if (restored.groups.length !== 1) throw new Error(`expected 1 group, got ${restored.groups.length}`);
 if (restored.groups[0].id !== 'BG-PERSIST') throw new Error('restored the wrong group');
 if (restored.employees[0]?.id !== 'EMP-1') throw new Error('employees were not restored');
-const restoredIpo = config.stocks.find((s) => s.id === 'STKBG-PERSIST');
+const restoredIpo = config.stocks.find((s) => s.id === expectedIpoId);
 if (!restoredIpo) throw new Error('IPO stock snapshot was not merged');
-if (restoredIpo.stockId !== 'STKBG-PERSIST') throw new Error('legacy stockId was not preserved');
+if (restoredIpo.stockId !== expectedIpoId) throw new Error('legacy stockId was not preserved');
 if (!restoredIpo.sectorId || !restoredIpo.listingYearMonth || !restoredIpo.basePrice) {
   throw new Error('IPO stock was not saved with market-compatible fields');
 }
