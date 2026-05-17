@@ -2228,7 +2228,7 @@ async function onAction(ev) {
       return;
     }
     try {
-      const ipo = bgManager.generateIPOObject(g);
+      const ipo = bgManager.generateIPOObject(g, { year: state.year, month: state.month });
       // 将 IPO 写入内存 config.stocks，方便导出为 JSON（注意：前端无法直接写回仓库文件）
       config.stocks = config.stocks || [];
       config.stocks.push(ipo);
