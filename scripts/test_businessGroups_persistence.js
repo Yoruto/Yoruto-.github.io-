@@ -31,4 +31,12 @@ if (restored.groups[0].id !== 'BG-PERSIST') throw new Error('restored the wrong 
 if (restored.employees[0]?.id !== 'EMP-1') throw new Error('employees were not restored');
 if (!config.stocks.some((s) => s.id === 'STKBG-PERSIST')) throw new Error('IPO stock snapshot was not merged');
 
+source.groups[0].fundingWan = 1;
+if (snapshot.groups[0].fundingWan !== 500) throw new Error('snapshot shares group references with source manager');
+
+restored.groups[0].fundingWan = 2;
+applyBusinessGroupsSnapshot(restored, snapshot, config);
+if (snapshot.groups[0].fundingWan !== 500) throw new Error('snapshot was mutated by restored manager');
+if (restored.groups[0].fundingWan !== 500) throw new Error('snapshot restore did not reset group data');
+
 console.log('business group persistence snapshot test passed');

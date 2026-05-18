@@ -3,7 +3,7 @@ import path from 'path';
 import assert from 'assert';
 import { pathToFileURL } from 'url';
 
-const root = path.resolve('d:/Yoruto-.github.io-/investment-sim/js');
+const root = path.resolve('investment-sim/js');
 function loadModule(rel) {
   const full = path.join(root, rel);
   return import(pathToFileURL(full).href);
