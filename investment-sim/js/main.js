@@ -123,9 +123,22 @@ function clearBgLocalStorage() {
   }
 }
 
+function resetBusinessGroupsForFreshState() {
+  clearBgLocalStorage();
+  selectedBgId = null;
+  if (!bgManager) return;
+  if (baseBgSnapshot) {
+    applyBusinessGroupsSnapshot(bgManager, baseBgSnapshot, null);
+    return;
+  }
+  bgManager.groups = [];
+  bgManager.employees = [];
+}
+
 let config = null;
 let state = null;
 let bgManager = null;
+let baseBgSnapshot = null;
 let currentView = 'market'; // 当前C区域显示的视图
 let selectedBusinessId = null; // 当前选中的业务ID（用于业务详情视图）
 let selectedBgId = null; // 当前选中的业务组 id（用于业务组详情视图）
@@ -1867,6 +1880,7 @@ async function onAction(ev) {
     cachedReProjects = [];
     cachedStartupBPs = [];
     selectedHrSubView = null;
+    resetBusinessGroupsForFreshState();
     runMonthOpening(state);
     saveToLocal(state);
     render();
@@ -2596,6 +2610,7 @@ async function onAction(ev) {
     if (!t) return;
     try {
       state = importJson(t);
+      resetBusinessGroupsForFreshState();
       saveToLocal(state);
       render();
     } catch (e) {
@@ -2705,6 +2720,7 @@ async function bootstrap() {
       groupsUrl: `${base}/business-groups.json${cacheBuster}`,
       employeesUrl: `${base}/employees.json${cacheBuster}`,
     });
+    baseBgSnapshot = buildBusinessGroupsSnapshot(bgManager, null);
     if (loadBgFromLocalStorage()) {
       console.log('BusinessGroupsManager data loaded from localStorage');
     } else {

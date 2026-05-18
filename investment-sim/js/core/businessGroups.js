@@ -326,25 +326,33 @@ export class BusinessGroupsManager {
   }
 }
 
+function cloneSerializable(value, fallback) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
 export function buildBusinessGroupsSnapshot(manager, config = null) {
   return {
-    groups: manager?.groups || [],
-    employees: manager?.employees || [],
-    configStocks: config?.stocks || [],
+    groups: cloneSerializable(manager?.groups || [], []),
+    employees: cloneSerializable(manager?.employees || [], []),
+    configStocks: cloneSerializable(config?.stocks || [], []),
     savedAt: Date.now(),
   };
 }
 
 export function applyBusinessGroupsSnapshot(manager, snapshot, config = null) {
   if (!manager || !snapshot || typeof snapshot !== 'object') return false;
-  if (Array.isArray(snapshot.groups)) manager.groups = snapshot.groups;
-  if (Array.isArray(snapshot.employees)) manager.employees = snapshot.employees;
+  if (Array.isArray(snapshot.groups)) manager.groups = cloneSerializable(snapshot.groups, []);
+  if (Array.isArray(snapshot.employees)) manager.employees = cloneSerializable(snapshot.employees, []);
 
   if (config && Array.isArray(snapshot.configStocks)) {
     config.stocks = config.stocks || [];
     for (const stock of snapshot.configStocks) {
       if (stock?.id && !config.stocks.find((s) => s.id === stock.id)) {
-        config.stocks.push(stock);
+        config.stocks.push(cloneSerializable(stock, { ...stock }));
       }
     }
   }
