@@ -32,6 +32,14 @@ export function loadFromLocal() {
   }
 }
 
+export function loadOrCreateState(createInitialState, seed = 1) {
+  const saved = loadFromLocal();
+  if (saved && typeof saved === 'object') {
+    return { state: saved, loaded: true };
+  }
+  return { state: createInitialState(seed), loaded: false };
+}
+
 export function clearLocal() {
   try {
     localStorage.removeItem(STORAGE_KEY);

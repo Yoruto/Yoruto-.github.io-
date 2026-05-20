@@ -51,7 +51,7 @@ import {
   sellOwnCompanyShares,
 } from './core/companyEquity.js';
 import { acceptNpcInvestment, rejectNpcInvestment } from './core/npcInvestors.js';
-import { saveToLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
+import { saveToLocal, loadOrCreateState, clearLocal, exportJson, importJson } from './core/persistence.js';
 import { initGM } from './core/gm.js';
 import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
 import { initOtherCompaniesUI } from './ui/otherCompaniesUI.js';
@@ -126,6 +126,7 @@ function clearBgLocalStorage() {
 let config = null;
 let state = null;
 let bgManager = null;
+let baseConfigStocks = [];
 let currentView = 'market'; // 当前C区域显示的视图
 let selectedBusinessId = null; // 当前选中的业务ID（用于业务详情视图）
 let selectedBgId = null; // 当前选中的业务组 id（用于业务组详情视图）
@@ -186,6 +187,11 @@ const EMBEDDED_CONFIG = {
     }
   }
 };
+
+function resetRuntimeConfigStocks() {
+  if (!config || !Array.isArray(baseConfigStocks)) return;
+  config.stocks = baseConfigStocks.map((stock) => ({ ...stock }));
+}
 
 // 业务显示映射（用于 UI 文本）
 const BUSINESS_DISPLAY = {
@@ -1861,8 +1867,12 @@ async function onAction(ev) {
   if (action === 'new-game') {
     const seed = Number(prompt('种子（默认 1）', '1')) || 1;
     state = createInitialState(seed);
+    clearBgLocalStorage();
+    bgManager = new BusinessGroupsManager({});
+    resetRuntimeConfigStocks();
     currentView = 'market';
     selectedBusinessId = null;
+    selectedBgId = null;
     selectedNewBusinessKind = null;
     cachedReProjects = [];
     cachedStartupBPs = [];
@@ -2588,14 +2598,29 @@ async function onAction(ev) {
     return;
   }
   if (action === 'export') {
-    window.prompt('JSON', exportJson(state));
+    window.prompt('JSON', exportJson({
+      ...state,
+      businessGroupsSnapshot: buildBusinessGroupsSnapshot(bgManager, config),
+    }));
     return;
   }
   if (action === 'import') {
     const t = window.prompt('粘贴 JSON');
     if (!t) return;
     try {
-      state = importJson(t);
+      const imported = importJson(t);
+      const bgSnapshot = imported?.businessGroupsSnapshot || null;
+      if (imported && typeof imported === 'object') delete imported.businessGroupsSnapshot;
+      state = imported;
+      resetRuntimeConfigStocks();
+      if (bgSnapshot) {
+        if (!bgManager) bgManager = new BusinessGroupsManager({});
+        applyBusinessGroupsSnapshot(bgManager, bgSnapshot, config);
+        saveBgToLocalStorage();
+      } else {
+        clearBgLocalStorage();
+        bgManager = new BusinessGroupsManager({});
+      }
       saveToLocal(state);
       render();
     } catch (e) {
@@ -2665,12 +2690,15 @@ async function bootstrap() {
     futures: raw.futures,
     sectors: raw.sectors || [],
   };
+  baseConfigStocks = (raw.stocks || []).map((stock) => ({ ...stock }));
 
   // #region agent log - Hypothesis D: Config object created
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-assigned',message:'config object assigned',data:{configIsNull:config===null,hasStocks:!!config?.stocks,hasFutures:!!config?.futures},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
-  state = createInitialState(1);
+  const restored = loadOrCreateState(createInitialState, 1);
+  state = restored.state;
+  const loadedMainState = restored.loaded;
 
   // #region agent log - Hypothesis C: State created
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:state-created',message:'initial state created',data:{stateIsNull:state===null,phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month},timestamp:Date.now()})}).catch(()=>{});
@@ -2705,10 +2733,12 @@ async function bootstrap() {
       groupsUrl: `${base}/business-groups.json${cacheBuster}`,
       employeesUrl: `${base}/employees.json${cacheBuster}`,
     });
-    if (loadBgFromLocalStorage()) {
+    if (loadedMainState && loadBgFromLocalStorage()) {
       console.log('BusinessGroupsManager data loaded from localStorage');
     } else {
-      console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
+      if (!loadedMainState) clearBgLocalStorage();
+      bgManager.groups = [];
+      console.log('BusinessGroupsManager initialized empty', bgManager.groups?.length, bgManager.employees?.length);
     }
   } catch (e) {
     console.warn('BusinessGroupsManager init failed', e);
