@@ -103,15 +103,28 @@ function stockIndexMarketCap(stock, priceNum) {
   return p * scale;
 }
 
+function listedNonPlayerStocksInReturnOrder(cfg, year, month) {
+  return listedStocksForMonth(cfg.stocks || [], year, month)
+    .filter((s) => !s.isPlayerCompany)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function stockReturnOrderIndexById(cfg, year, month) {
+  const m = new Map();
+  listedNonPlayerStocksInReturnOrder(cfg, year, month).forEach((s, i) => {
+    m.set(s.id, i);
+  });
+  return m;
+}
+
 export function rebalanceAnnualBroadIndexWeights(state, cfg, cMacro) {
-  const universe = listedStocksForMonth(cfg.stocks || [], state.year, 1).filter((s) => !s.isPlayerCompany);
+  const universe = listedNonPlayerStocksInReturnOrder(cfg, state.year, 1);
   const weights = Object.create(null);
   if (!universe.length) {
     state.broadIndexWeights = { forYear: state.year, weights: {} };
     return;
   }
-  const sorted = [...universe].sort((a, b) => a.id.localeCompare(b.id));
-  const rows = sorted.map((s, i) => {
+  const rows = universe.map((s, i) => {
     const price = computeSpotDisplayPrice(state, cfg, s, cMacro, i);
     return { s, cap: stockIndexMarketCap(s, price) };
   });
@@ -134,18 +147,21 @@ export function ensureAnnualBroadIndexWeights(state, cfg, cMacro) {
   rebalanceAnnualBroadIndexWeights(state, cfg, cMacro);
 }
 
-/** 大盘综指本月涨跌幅（百分比数值，如 1.25 表示 +1.25%），与主界面一致（成分用 orderIndex 0） */
+/** 大盘综指本月涨跌幅（百分比数值，如 1.25 表示 +1.25%），与个股展示/月结使用同一收益槽位 */
 export function computeBroadIndexMonthlyReturnPct(state, cfg, cMacro) {
   ensureAnnualBroadIndexWeights(state, cfg, cMacro);
   const wObj = state.broadIndexWeights?.weights || {};
   const ids = Object.keys(wObj).filter((id) => (Number(wObj[id]) || 0) > 0);
   if (!ids.length) return 0;
+  const orderIndexById = stockReturnOrderIndexById(cfg, state.year, state.month);
   let idxRet = 0;
   for (const id of ids) {
     const w = Number(wObj[id]) || 0;
     const stk = (cfg.stocks || []).find((x) => x.id === id);
     if (!stk) continue;
-    const bp = getStockFactorParts(state, cfg, stk, cMacro, 0).totalReturnBp;
+    const orderIndex = orderIndexById.get(id);
+    if (orderIndex == null) continue;
+    const bp = getStockFactorParts(state, cfg, stk, cMacro, orderIndex).totalReturnBp;
     idxRet += w * (bp / 100);
   }
   return idxRet;
@@ -172,14 +188,10 @@ export function computeBroadMarketIndexReturnForUI(state, cfg, cMacro) {
  */
 export function applyStockSpotAndIndexAccumulators(state, config) {
   if (!state.stockSpotMult) state.stockSpotMult = Object.create(null);
-  const stocks = [...(config.stocks || [])]
-    .filter((s) => !s.isPlayerCompany)
-    .sort((a, b) => a.id.localeCompare(b.id));
-  let oi = 0;
-  for (const stock of stocks) {
-    if (!listingOk(stock.listingYearMonth, state.year, state.month)) continue;
+  const stocks = listedNonPlayerStocksInReturnOrder(config, state.year, state.month);
+  for (let oi = 0; oi < stocks.length; oi++) {
+    const stock = stocks[oi];
     const bp = getStockFactorParts(state, config, stock, state.actualEquityC, oi).totalReturnBp;
-    oi++;
     const prev = state.stockSpotMult[stock.id];
     state.stockSpotMult[stock.id] = (prev != null ? prev : 1) * (1 + bp / 10000);
   }
