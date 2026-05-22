@@ -56,7 +56,7 @@ assert.equal(loaded.companyCashWan, 123);
 assert.equal(loaded.schemaVersion, SCHEMA_VERSION);
 assert.equal(loaded.employees[0].leadership, 6);
 assert.equal(loaded.activeBusinesses[0].industry, 'finance');
-assert.equal(store.get('investment-company-v2-save'), null);
+assert.equal(store.has('investment-company-v2-save'), false);
 assert.ok(store.get('investment-sim-dev-v5'));
 
 store = installLocalStorageStub({ throwOnSetKey: 'investment-sim-dev-v5' });
@@ -70,7 +70,7 @@ store.set('investment-sim-dev-save', legacyOnly);
 loaded = loadFromLocal();
 assert.equal(loaded.year, 2002);
 assert.equal(store.get('investment-sim-dev-save'), legacyOnly);
-assert.equal(store.get('investment-sim-dev-v5'), null);
+assert.equal(store.has('investment-sim-dev-v5'), false);
 
 const imported = importJson(JSON.stringify({
   year: 1999,

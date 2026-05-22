@@ -11,12 +11,15 @@ async function run() {
   const groupsPath = path.join(base, 'business-groups.json');
   const empsPath = path.join(base, 'employees.json');
 
-  const groups = JSON.parse(fs.readFileSync(groupsPath, 'utf8'));
-  const employees = JSON.parse(fs.readFileSync(empsPath, 'utf8'));
+  const groupsDoc = JSON.parse(fs.readFileSync(groupsPath, 'utf8'));
+  const employeesDoc = JSON.parse(fs.readFileSync(empsPath, 'utf8'));
+  const groups = groupsDoc.groups || [];
+  const employees = employeesDoc.employees || [];
+  const beforeGroups = JSON.parse(JSON.stringify(groups));
 
   const mgr = new BusinessGroupsManager({ deterministic: true });
   // 直接注入数据以便测试
-  mgr.groups = groups;
+  mgr.groups = JSON.parse(JSON.stringify(groups));
   mgr.employees = employees;
 
   console.log('BEFORE tick:');
@@ -28,7 +31,7 @@ async function run() {
   mgr.groups.forEach(g => console.log(g.id, g.name, 'fundingWan=', g.fundingWan, 'valuationWan=', g.metrics?.valuationWan));
 
   // 简单断言示例（非测试框架）
-  const anyChanged = mgr.groups.some((g, i) => g.fundingWan !== groups[i].fundingWan || g.metrics?.valuationWan !== groups[i].metrics?.valuationWan);
+  const anyChanged = mgr.groups.some((g, i) => g.fundingWan !== beforeGroups[i].fundingWan || g.metrics?.valuationWan !== beforeGroups[i].metrics?.valuationWan);
   console.log('\nTick changed values?', anyChanged ? 'YES' : 'NO');
 }
 
