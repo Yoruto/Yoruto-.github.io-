@@ -1,9 +1,10 @@
 import fs from 'fs';
 import path from 'path';
 import assert from 'assert';
-import { pathToFileURL } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
-const root = path.resolve('d:/Yoruto-.github.io-/investment-sim/js');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(__dirname, '../js');
 function loadModule(rel) {
   const full = path.join(root, rel);
   return import(pathToFileURL(full).href);
