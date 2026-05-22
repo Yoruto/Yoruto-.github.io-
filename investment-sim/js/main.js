@@ -51,7 +51,7 @@ import {
   sellOwnCompanyShares,
 } from './core/companyEquity.js';
 import { acceptNpcInvestment, rejectNpcInvestment } from './core/npcInvestors.js';
-import { saveToLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
+import { saveToLocal, loadFromLocal, clearLocal, exportJson, importJson } from './core/persistence.js';
 import { initGM } from './core/gm.js';
 import { renderGMPanel, bindGMUI, renderGMButton } from './core/gm-ui.js';
 import { initOtherCompaniesUI } from './ui/otherCompaniesUI.js';
@@ -123,9 +123,24 @@ function clearBgLocalStorage() {
   }
 }
 
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function resetBusinessGroupsToInitialSnapshot() {
+  if (!bgManager) return;
+  if (initialBgSnapshot) {
+    applyBusinessGroupsSnapshot(bgManager, cloneJson(initialBgSnapshot), config);
+  } else {
+    bgManager.groups = [];
+    bgManager.employees = [];
+  }
+}
+
 let config = null;
 let state = null;
 let bgManager = null;
+let initialBgSnapshot = null;
 let currentView = 'market'; // 当前C区域显示的视图
 let selectedBusinessId = null; // 当前选中的业务ID（用于业务详情视图）
 let selectedBgId = null; // 当前选中的业务组 id（用于业务组详情视图）
@@ -1861,8 +1876,11 @@ async function onAction(ev) {
   if (action === 'new-game') {
     const seed = Number(prompt('种子（默认 1）', '1')) || 1;
     state = createInitialState(seed);
+    resetBusinessGroupsToInitialSnapshot();
+    clearBgLocalStorage();
     currentView = 'market';
     selectedBusinessId = null;
+    selectedBgId = null;
     selectedNewBusinessKind = null;
     cachedReProjects = [];
     cachedStartupBPs = [];
@@ -2670,7 +2688,8 @@ async function bootstrap() {
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:config-assigned',message:'config object assigned',data:{configIsNull:config===null,hasStocks:!!config?.stocks,hasFutures:!!config?.futures},timestamp:Date.now()})}).catch(()=>{});
   // #endregion
 
-  state = createInitialState(1);
+  const loadedState = loadFromLocal();
+  state = loadedState || createInitialState(1);
 
   // #region agent log - Hypothesis C: State created
   fetch('http://127.0.0.1:7560/ingest/77a3c25e-7bb2-4bbf-97cc-1f5ddf8c78b0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'04fd4d'},body:JSON.stringify({sessionId:'04fd4d',location:'main.js:state-created',message:'initial state created',data:{stateIsNull:state===null,phase:state?.phase,gameOver:state?.gameOver,victory:state?.victory,year:state?.year,month:state?.month},timestamp:Date.now()})}).catch(()=>{});
@@ -2705,7 +2724,9 @@ async function bootstrap() {
       groupsUrl: `${base}/business-groups.json${cacheBuster}`,
       employeesUrl: `${base}/employees.json${cacheBuster}`,
     });
-    if (loadBgFromLocalStorage()) {
+    initialBgSnapshot = cloneJson(buildBusinessGroupsSnapshot(bgManager));
+    if (!loadedState) clearBgLocalStorage();
+    if (loadedState && loadBgFromLocalStorage()) {
       console.log('BusinessGroupsManager data loaded from localStorage');
     } else {
       console.log('BusinessGroupsManager loaded', bgManager.groups?.length, bgManager.employees?.length);
